@@ -94,11 +94,11 @@ def ensure_certificate(state_dir: Path, hostname: str) -> tuple[Path, Path]:
     import ipaddress
     try:
         ipaddress.ip_address(hostname)
-        san, check_flag = "IP:" + hostname, "-checkip"
+        san, check_flag = "IP:" + hostname, "-verify_ip"
     except ValueError:
         if not hostname or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-" for c in hostname):
             raise ValueError("Host must be an IP address or DNS name")
-        san, check_flag = "DNS:" + hostname, "-checkhost"
+        san, check_flag = "DNS:" + hostname, "-verify_hostname"
     certificate, key = state_dir / "certificate.pem", state_dir / "private-key.pem"
     for path in (certificate, key):
         if path.is_symlink():
@@ -122,11 +122,11 @@ def ensure_certificate(state_dir: Path, hostname: str) -> tuple[Path, Path]:
             certificate.unlink(missing_ok=True)
             key.unlink(missing_ok=True)
             raise
-    for check in ([check_flag, hostname], ["-checkend", "0"]):
-        result = subprocess.run(["openssl", "x509", "-in", str(certificate), "-noout", *check],
+    result = subprocess.run(["openssl", "verify", "-CAfile", str(certificate),
+                             check_flag, hostname, str(certificate)],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
-        if result.returncode:
-            raise ValueError("Saved certificate is expired or does not match --host; use a new --state-dir and re-pair")
+    if result.returncode:
+        raise ValueError("Saved certificate is expired or does not match --host; use a new --state-dir and re-pair")
     _secure_permissions(key)
     return certificate, key
 
