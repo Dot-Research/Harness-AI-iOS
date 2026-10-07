@@ -1,0 +1,13 @@
+name: Core and companion
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    container: swift:6.2
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: apt-get update && apt-get install -y libsqlite3-dev python3 openssl
+      - run: swift test -j 4
+      - run: PYTHONPATH=companion python3 -m unittest discover -s companion/tests -v

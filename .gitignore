@@ -1,0 +1,16 @@
+.build/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+*.xcarchive
+DerivedData/
+.harness/
+.env
+.env.*
+!.env.example
+*.p12
+*.mobileprovision
