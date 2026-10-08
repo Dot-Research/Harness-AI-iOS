@@ -430,7 +430,7 @@ Unlocking doors, opening garages and security-related actions should require str
 
 Create a system-wide custom keyboard extension optimized around dictation rather than replacing normal typing.
 
-Add a compact top control layer similar conceptually to Diction:
+Add a compact top control layer similar conceptually to Diction/Typeless/Superwhisper/WhisprFlow:
 
 🎙 Dictate | Fix | Rewrite | Ask Harness
 
@@ -467,8 +467,7 @@ Privacy: Low risk
 
 [Run] [Fork]
 
-♡ 437   💬 52   Share
-1.8K runs · 291 forks
+♡ 437   💬 52   1.8K runs
 
 Users may:
 
