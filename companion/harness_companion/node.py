@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -89,16 +90,43 @@ def certificate_fingerprint(certificate: Path) -> str:
     return hashlib.sha256(der).hexdigest()
 
 
+def _certificate_names(certificate: Path) -> tuple[set[str], set]:
+    """DNS names and IP addresses in a certificate's subjectAltName.
+
+    Read from `openssl x509 -text`, which OpenSSL and LibreSSL (macOS's built-in openssl) print the
+    same way. LibreSSL has no -checkhost/-checkip, and OpenSSL's -checkip reports a mismatch but
+    still exits 0, so neither flag can be relied on."""
+    result = subprocess.run(["openssl", "x509", "-in", str(certificate), "-noout", "-text"],
+                            capture_output=True, text=True, timeout=10)
+    dns: set[str] = set()
+    ips: set = set()
+    if result.returncode:
+        return dns, ips
+    lines = result.stdout.splitlines()
+    for index, line in enumerate(lines[:-1]):
+        if "X509v3 Subject Alternative Name" not in line:
+            continue
+        for entry in lines[index + 1].split(","):
+            kind, _, value = entry.strip().partition(":")
+            if kind == "DNS":
+                dns.add(value.strip().lower())
+            elif kind == "IP Address":
+                try:
+                    ips.add(ipaddress.ip_address(value.strip()))
+                except ValueError:
+                    pass
+    return dns, ips
+
+
 def ensure_certificate(state_dir: Path, hostname: str) -> tuple[Path, Path]:
     """Generate an OpenSSL self-signed certificate for explicit iPhone pinning."""
-    import ipaddress
     try:
-        ipaddress.ip_address(hostname)
-        san, check_flag = "IP:" + hostname, "-checkip"
+        wanted_ip = ipaddress.ip_address(hostname)
+        san = "IP:" + hostname
     except ValueError:
         if not hostname or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-" for c in hostname):
             raise ValueError("Host must be an IP address or DNS name")
-        san, check_flag = "DNS:" + hostname, "-checkhost"
+        wanted_ip, san = None, "DNS:" + hostname
     certificate, key = state_dir / "certificate.pem", state_dir / "private-key.pem"
     for path in (certificate, key):
         if path.is_symlink():
@@ -122,11 +150,12 @@ def ensure_certificate(state_dir: Path, hostname: str) -> tuple[Path, Path]:
             certificate.unlink(missing_ok=True)
             key.unlink(missing_ok=True)
             raise
-    for check in ([check_flag, hostname], ["-checkend", "0"]):
-        result = subprocess.run(["openssl", "x509", "-in", str(certificate), "-noout", *check],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
-        if result.returncode:
-            raise ValueError("Saved certificate is expired or does not match --host; use a new --state-dir and re-pair")
+    dns, ips = _certificate_names(certificate)
+    matches = wanted_ip in ips if wanted_ip is not None else hostname.lower() in dns
+    unexpired = subprocess.run(["openssl", "x509", "-in", str(certificate), "-noout", "-checkend", "0"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+    if not (matches and unexpired):
+        raise ValueError("Saved certificate is expired or does not match --host; use a new --state-dir and re-pair")
     _secure_permissions(key)
     return certificate, key
 
