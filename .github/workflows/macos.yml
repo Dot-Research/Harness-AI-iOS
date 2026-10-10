@@ -38,11 +38,13 @@ jobs:
       - name: Xcode project matches scripts/generate-project.py
         run: python3 scripts/generate-project.py && git diff --exit-code -- iOS/Harness.xcodeproj
       - run: xcodebuild -version && swift --version
-      - name: Build Harness and Harness Keyboard for iOS Simulator
+      # What ships: an arm64 iPhone build (unsigned). Developers on Apple silicon build arm64
+      # simulators locally; the generic simulator destination adds an Intel slice we don't ship.
+      - name: Build Harness and Harness Keyboard for iPhone
         run: |
           set -o pipefail
-          xcodebuild -project iOS/Harness.xcodeproj -scheme Harness \
-            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+          xcodebuild -project iOS/Harness.xcodeproj -scheme Harness -configuration Debug \
+            -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO build 2>&1 | tee xcodebuild.log | grep -E ': (error|warning):|BUILD (SUCCEEDED|FAILED)|\*\* ' || true
           grep -q '\*\* BUILD SUCCEEDED \*\*' xcodebuild.log
       - if: failure()
