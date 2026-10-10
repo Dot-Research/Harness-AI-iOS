@@ -1,0 +1,68 @@
+name: iOS app
+# Builds the app and keyboard extension with Xcode. macOS minutes cost more than Linux minutes on
+# private repositories, so this runs only when app, package or companion code changes.
+on:
+  pull_request:
+    paths:
+      - 'iOS/**'
+      - 'Packages/**'
+      - 'Sources/**'
+      - 'Package.swift'
+      - 'companion/**'
+      - 'scripts/generate-project.py'
+      - '.github/workflows/macos.yml'
+      - '.github/scripts/**'
+  push:
+    branches: [main]
+    paths:
+      - 'iOS/**'
+      - 'Packages/**'
+      - 'Sources/**'
+      - 'Package.swift'
+      - 'companion/**'
+      - 'scripts/generate-project.py'
+      - '.github/workflows/macos.yml'
+      - '.github/scripts/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Xcode project matches scripts/generate-project.py
+        run: python3 scripts/generate-project.py && git diff --exit-code -- iOS/Harness.xcodeproj
+      - run: xcodebuild -version && swift --version
+      - name: Build Harness and Harness Keyboard for iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project iOS/Harness.xcodeproj -scheme Harness \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee xcodebuild.log | grep -E ': (error|warning):|BUILD (SUCCEEDED|FAILED)|\*\* ' || true
+          grep -q '\*\* BUILD SUCCEEDED \*\*' xcodebuild.log
+      - if: failure()
+        run: .github/scripts/annotate-failure.sh xcodebuild.log "xcodebuild"
+      - name: Dictation tests on macOS
+        run: set -o pipefail; swift test --package-path Packages/HarnessDictation 2>&1 | tee mac-tests.log
+      - if: failure()
+        run: .github/scripts/annotate-failure.sh mac-tests.log "Dictation tests (macOS)"
+
+  companion:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Companion tests with macOS's built-in openssl (LibreSSL)
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/sysbin" && ln -sf /usr/bin/openssl "$RUNNER_TEMP/sysbin/openssl"
+          export PATH="$RUNNER_TEMP/sysbin:$PATH"
+          python3 --version; openssl version
+          PYTHONPATH=companion python3 -m unittest discover -s companion/tests -v 2>&1 | tee companion.log
+      - if: failure()
+        run: .github/scripts/annotate-failure.sh companion.log "Companion tests (macOS LibreSSL)"

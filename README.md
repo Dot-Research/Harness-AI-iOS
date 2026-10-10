@@ -22,7 +22,7 @@ The native SwiftUI implementation keeps the conversation and navigation mounted 
 
 Requires **macOS, Xcode 26 or later, and iOS 26 or later**. Use an Xcode release that supports your physical device's installed OS (including the current iOS 27 SDK for iPhone Duo acceptance). Open `iOS/Harness.xcodeproj`, select the shared **Harness** scheme, set your signing team and a unique bundle identifier, and run on your iPhone. Apple Intelligence must be enabled and its model downloaded for on-device generation; cloud access is optional.
 
-The checked-in project uses the local `HarnessCore` package and needs no third-party Swift dependencies. Regenerate it after adding app files:
+The checked-in project uses the local `HarnessCore` and `HarnessDictation` packages and needs no third-party Swift dependencies. It has two targets: the Harness app and the Harness Keyboard extension, sharing the App Group `group.org.harness.ios` (create it for your team, or change it in both `.entitlements` files, to run on a device). Regenerate it after adding app files:
 
 ```sh
 python3 scripts/generate-project.py
@@ -42,7 +42,8 @@ The Apple adapter calls `FoundationModels.SystemLanguageModel` and `LanguageMode
 
 ## What is implemented
 
-- Four adaptive native tabs: GOD, Agents, Red, and Me; expanded widths use a navigation rail and live workspace panel. The director can be renamed without changing its role.
+- Five adaptive native tabs: GOD, Dictation, Agents, Red, and Me; expanded widths use a navigation rail and live workspace panel. The director can be renamed without changing its role.
+- **Harness Keyboard** and the Dictation tab ([Packages/HarnessDictation](Packages/HarnessDictation/README.md)): a system-wide dictation keyboard with Dictate | Fix | Rewrite | Ask Harness, on-device transcription by default (Apple SpeechAnalyzer), optional cloud endpoint, on-device cleanup of fillers and self-corrections, and no audio retention. Ask Harness opens GOD with the text in the composer.
 - A presentation-independent, bounded agent loop with sequential tool calls, scoped specialist delegation, cancellation, saved sessions, and context windows that retain complete tool-call/result groups.
 - Local SQLite records for sessions, separate SOUL/USER/MEMORY/AGENTS files, skills, learning proposals, Journey, settings, and an inspectable activity trail. Agent files support Markdown import/export.
 - Metadata-first skill recall using keyword relevance and recorded outcomes; lazy procedure loading; versioned editing, disabling and deletion. Learned skills start disabled and never gain native privileges automatically. Embeddings and bundled skill scripts are not implemented.
@@ -59,6 +60,8 @@ Swift 6.2, SQLite development headers, Python 3.11+, and OpenSSL are sufficient.
 ```sh
 swift test -j 4
 PYTHONPATH=companion python3 -m unittest discover -s companion/tests -v
+swift test --package-path Packages/HarnessDictation
+Packages/HarnessDictation/Tools/LinuxTypeCheck/check.sh   # SwiftUI/UIKit type-check without an Apple SDK
 ```
 
 In the prepared Codex cloud environment:
@@ -68,7 +71,7 @@ source /workspace/toolchains/env.sh
 bash scripts/check.sh
 ```
 
-The cloud machine has a signature-verified Swift 6.2 toolchain and authenticated SQLite packages outside the checkout. It can build and test `HarnessCore` and the companion; it cannot compile SwiftUI, access an iOS simulator, exercise Keychain/Face ID/camera, or run Apple Foundation Models. Native iOS compilation and device acceptance remain required. CI checks the portable core and companion; its workflow has not yet run on GitHub.
+The cloud machine has a signature-verified Swift 6.2 toolchain and authenticated SQLite packages outside the checkout. It can build and test `HarnessCore` and the companion; it cannot compile SwiftUI, access an iOS simulator, exercise Keychain/Face ID/camera, or run Apple Foundation Models. CI runs the core, companion and dictation checks on Linux, and builds the app and keyboard with Xcode on macOS (`.github/workflows/macos.yml`, when app, package or companion code changes). Device acceptance remains required.
 
 ## Device acceptance on a Mac
 
@@ -76,7 +79,7 @@ Use available simulator identifiers from `xcrun simctl list devices available`; 
 
 ## Current boundaries
 
-HomeKit, SSH, Shortcuts, Calendar, Reminders, Contacts, Messages/Notes, a dictation keyboard extension, a public Red backend, account sync and persistent background execution are not part of this first build. Conversations and skills work locally, but offline tool orchestration needs a configured tool-capable local endpoint. The app cancels active work when entering the background; it does not promise a permanently running iOS process.
+HomeKit, SSH, Shortcuts, Calendar, Reminders, Contacts, Messages/Notes, a public Red backend, account sync and persistent background execution are not part of this first build. Conversations and skills work locally, but offline tool orchestration needs a configured tool-capable local endpoint. The app cancels active work when entering the background; it does not promise a permanently running iOS process.
 
 macOS/Linux companion filesystem isolation uses descriptor-based path checks and has been tested on Linux. Windows filesystem tools fail closed; experimental Windows pairing/command execution requires owner-only credential ACLs and still needs native verification. Command execution is a powerful, separately granted capability and is not confined to the selected file root.
 
