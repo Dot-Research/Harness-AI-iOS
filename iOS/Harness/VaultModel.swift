@@ -30,7 +30,7 @@ final class VaultModel: ObservableObject {
         var root = Self.defaultRoot
         if let data = UserDefaults.standard.data(forKey: Self.bookmarkKey) {
             var stale = false
-            if let url = try? URL(resolvingBookmarkData: data, bookmarkDataOptions: [], relativeTo: nil, bookmarkDataIsStale: &stale),
+            if let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale),
                url.startAccessingSecurityScopedResource() {
                 root = url
                 scopedURL = url
