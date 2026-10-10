@@ -7,6 +7,11 @@ log="$1"; title="$2"
 if grep -q '^======' "$log"; then
   # unittest: the failure details start at the first ==== separator.
   lines="$(sed -n '/^======/,$p' "$log" | head -150)"
+elif grep -q 'Undefined symbols' "$log"; then
+  # Linker: the whole undefined-symbols block, and whether -lsqlite3 reached each link command.
+  lines="$(sed -n '/Undefined symbols/,/symbol(s) not found/p' "$log" | awk '!seen[$0]++' | head -120)
+link commands mentioning -lsqlite3: $(grep -E '^\s*(Ld |cd .*clang|.*/clang .*-Xlinker)' "$log" | grep -c -- '-lsqlite3') of $(grep -cE '^\s*Ld ' "$log") Ld steps
+$(grep -E 'BUILD FAILED|^\s+Ld .*\(in target' "$log" | head -10)"
 else
   lines="$(grep -E -A4 ': error:|error: |Undefined symbols|duplicate symbol|ld: |ld\[|fatal error|FAIL|Traceback|Error:|BUILD FAILED' "$log" \
     | grep -vE ': warning: |^\s*$' | awk '!seen[$0]++' | head -150)"
