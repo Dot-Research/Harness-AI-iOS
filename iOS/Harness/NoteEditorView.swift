@@ -296,12 +296,15 @@ struct NoteEditorView: View {
     }
 
     private func rename() async {
-        saveNow()
+        // Finish saving before the file moves, so the save can't land on the old path.
+        saveTask?.cancel()
+        await save()
         if let renamed = await vault.rename(path, to: newName) { path = renamed }
     }
 
     private func move(to folder: VaultPath?) async {
-        saveNow()
+        saveTask?.cancel()
+        await save()
         if let moved = await vault.move(path, to: folder) { path = moved }
     }
 
