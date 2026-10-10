@@ -7,7 +7,8 @@ public enum VaultError: Error, LocalizedError, Equatable, Sendable {
     case tooLarge(String)
     /// The file changed on disk since it was read (another app, sync, or the Files app).
     case conflict(path: String, modified: Date)
-    case privateNote(String)
+    /// An agent asked for a note that doesn't exist or is in a private folder (deliberately the same).
+    case notReadable(String)
     case unsupported(String)
 
     public var errorDescription: String? {
@@ -17,10 +18,17 @@ public enum VaultError: Error, LocalizedError, Equatable, Sendable {
         case .alreadyExists(let path): return "\(path) already exists."
         case .tooLarge(let path): return "\(path) is larger than 2 MB, so Harness won't open it."
         case .conflict(let path, _): return "\(path) changed outside Harness since you opened it."
-        case .privateNote(let path): return "\(path) is in a private folder. Agents can only read folders you mark “Agents can read”."
+        case .notReadable(let reference): return "No note “\(reference)” in the folders agents can read. Other folders are private."
         case .unsupported(let detail): return detail
         }
     }
+}
+
+public struct VaultMove: Equatable, Sendable {
+    public var path: VaultPath
+    public var updatedNotes: Int
+    /// Notes whose links couldn't be updated (changed meanwhile, unreadable). The move itself succeeded.
+    public var failedNotes: [VaultPath]
 }
 
 public struct VaultDocument: Equatable, Sendable {
@@ -98,7 +106,11 @@ public actor VaultStore: VaultReading {
         let attributes = try fileManager.attributesOfItem(atPath: target.path)
         if ((attributes[.size] as? NSNumber)?.intValue ?? 0) > Self.maxNoteBytes { throw VaultError.tooLarge(path.rawValue) }
         guard let data = fileManager.contents(atPath: target.path) else { throw VaultError.notFound(path.rawValue) }
-        return VaultDocument(path: path, text: String(decoding: data, as: UTF8.self),
+        // Decoding lossily and saving back would destroy non-UTF-8 text, so refuse instead.
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw VaultError.unsupported("\(path.rawValue) isn't UTF-8 text, so Harness won't open it (saving would damage it).")
+        }
+        return VaultDocument(path: path, text: text,
                              modified: attributes[.modificationDate] as? Date ?? .distantPast)
     }
 
@@ -142,24 +154,23 @@ public actor VaultStore: VaultReading {
 
     /// Renames a note and updates links to it in other notes. Returns the new path and how many
     /// notes were updated.
-    public func rename(_ path: VaultPath, to newTitle: String) throws -> (path: VaultPath, updatedNotes: Int) {
+    public func rename(_ path: VaultPath, to newTitle: String) throws -> VaultMove {
         let clean = try Self.sanitizedName(newTitle)
         guard let destination = Self.childPath(clean + ".md", in: path.parent) else { throw VaultError.invalidName(newTitle) }
         return try relocate(path, to: destination)
     }
 
     /// Moves a note into `folder` (nil: the vault root), updating links that named its old location.
-    public func move(_ path: VaultPath, to folder: VaultPath?) throws -> VaultPath {
+    public func move(_ path: VaultPath, to folder: VaultPath?) throws -> VaultMove {
         guard let target = Self.childPath(path.name, in: folder) else { throw VaultError.invalidName(path.name) }
         if let folder { try fileManager.createDirectory(at: try url(for: folder), withIntermediateDirectories: true) }
-        return try relocate(path, to: target).path
+        return try relocate(path, to: target)
     }
 
     /// Moves the note to the vault's `.trash` folder, where it can be recovered in Files.
     public func delete(_ path: VaultPath) throws {
         let source = try existingFile(path)
-        let trash = root.appendingPathComponent(".trash", isDirectory: true)
-        try fileManager.createDirectory(at: trash, withIntermediateDirectories: true)
+        let trash = try realDirectory(".trash")
         let stamp = Int(Date().timeIntervalSince1970)
         try fileManager.moveItem(at: source, to: trash.appendingPathComponent("\(stamp) \(path.name)"))
         cache[path] = nil
@@ -179,7 +190,7 @@ public actor VaultStore: VaultReading {
     // MARK: Agent access
 
     public func accessPolicy() -> VaultAccessPolicy {
-        guard let data = fileManager.contents(atPath: root.appendingPathComponent(Self.policyFile).path),
+        guard !isSymbolicLink(root.appendingPathComponent(".harness")), let data = fileManager.contents(atPath: root.appendingPathComponent(Self.policyFile).path),
               let policy = try? JSONDecoder().decode(VaultAccessPolicy.self, from: data) else { return VaultAccessPolicy() }
         return policy
     }
@@ -188,26 +199,30 @@ public actor VaultStore: VaultReading {
     public func setAgentAccess(_ folder: String, readable: Bool) throws {
         var policy = accessPolicy()
         if readable { policy.agentReadable.insert(folder) } else { policy.agentReadable.remove(folder) }
-        let target = root.appendingPathComponent(Self.policyFile)
-        try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let target = try realDirectory(".harness").appendingPathComponent("vault.json")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(policy).write(to: target, options: .atomic)
     }
 
     public func agentSearch(_ query: String, limit: Int) throws -> [VaultSearchHit] {
-        let policy = accessPolicy()
-        return try index().search(query, limit: limit, where: policy.allowsAgents)
+        try readableIndex().search(query, limit: limit)
     }
 
-    /// `reference` is a vault path ("Projects/Roadmap.md") or a note name ("Roadmap").
+    /// `reference` is a vault path ("Projects/Roadmap.md") or a note name ("Roadmap"). Only notes in
+    /// readable folders are considered, so private notes can't shadow readable ones or be probed by
+    /// name: a private note and a missing one get the same answer.
     public func agentRead(_ reference: String) throws -> VaultDocument {
-        let index = try index()
-        guard let path = VaultPath(reference).flatMap({ index.notes[$0] != nil ? $0 : nil }) ?? index.resolve(reference) else {
-            throw VaultError.notFound(reference)
+        let readable = try readableIndex()
+        guard let path = VaultPath(reference).flatMap({ readable.notes[$0] != nil ? $0 : nil }) ?? readable.resolve(reference) else {
+            throw VaultError.notReadable(reference)
         }
-        guard accessPolicy().allowsAgents(path) else { throw VaultError.privateNote(path.rawValue) }
         return try read(path)
+    }
+
+    private func readableIndex() throws -> VaultIndex {
+        let policy = accessPolicy()
+        return VaultIndex(notes: try index().notes.values.filter { policy.allowsAgents($0.path) })
     }
 
     // MARK: Helpers
@@ -229,27 +244,34 @@ public actor VaultStore: VaultReading {
         return parent.appending(name)
     }
 
-    private func relocate(_ path: VaultPath, to destination: VaultPath) throws -> (path: VaultPath, updatedNotes: Int) {
+    private func relocate(_ path: VaultPath, to destination: VaultPath) throws -> VaultMove {
         let source = try existingFile(path)
-        if destination == path { return (path, 0) }
+        if destination == path { return VaultMove(path: path, updatedNotes: 0, failedNotes: []) }
         let target = try url(for: destination)
         // Case-only renames are the same file on case-insensitive file systems.
         if destination.rawValue.lowercased() != path.rawValue.lowercased(), fileManager.fileExists(atPath: target.path) {
             throw VaultError.alreadyExists(destination.rawValue)
         }
         let before = try index()
+        let after = before.moving(path, to: destination)
         try fileManager.moveItem(at: source, to: target)
+        cache[path] = nil
+        // The note has moved; from here on, a failure to update one note's links is reported, not thrown.
         var updated = 0
+        var failed: [VaultPath] = []
         for (otherPath, summary) in before.notes where otherPath != path && summary.note.links.contains(where: { before.resolve($0.target, from: otherPath) == path }) {
-            let document = try read(otherPath)
-            let rewritten = VaultLinkRewriter.rewrite(document.text, in: otherPath, from: path, to: destination, index: before)
-            if rewritten != document.text {
-                try write(otherPath, text: rewritten, expectedModified: document.modified)
-                updated += 1
+            do {
+                let document = try read(otherPath)
+                let rewritten = VaultLinkRewriter.rewrite(document.text, in: otherPath, from: path, to: destination, before: before, after: after)
+                if rewritten != document.text {
+                    try write(otherPath, text: rewritten, expectedModified: document.modified)
+                    updated += 1
+                }
+            } catch {
+                failed.append(otherPath)
             }
         }
-        cache[path] = nil
-        return (destination, updated)
+        return VaultMove(path: destination, updatedNotes: updated, failedNotes: failed)
     }
 
     private func uniquePath(base: String, in folder: VaultPath?) throws -> VaultPath {
@@ -261,9 +283,15 @@ public actor VaultStore: VaultReading {
         throw VaultError.alreadyExists(base)
     }
 
-    /// The file URL for `path`, guaranteed to be inside the vault.
+    /// The file URL for `path`, guaranteed to be inside the vault: no component may be a symbolic link,
+    /// so a linked folder can't redirect reads or writes elsewhere.
     private func url(for path: VaultPath) throws -> URL {
-        let target = path.components.reduce(root) { $0.appendingPathComponent($1) }.standardizedFileURL
+        var current = root
+        for component in path.components {
+            current = current.appendingPathComponent(component)
+            if isSymbolicLink(current) { throw VaultError.unsupported("Harness doesn't follow symbolic links in the vault (\(path.rawValue)).") }
+        }
+        let target = current.standardizedFileURL
         guard target.path.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/") else { throw VaultError.invalidName(path.rawValue) }
         return target
     }
@@ -276,6 +304,14 @@ public actor VaultStore: VaultReading {
             throw VaultError.unsupported("\(path.rawValue) isn't a regular file, so Harness won't open it.")
         }
         return target
+    }
+
+    /// A hidden folder at the vault root (".trash", ".harness"), created if needed, never a link.
+    private func realDirectory(_ name: String) throws -> URL {
+        let url = root.appendingPathComponent(name, isDirectory: true)
+        if isSymbolicLink(url) { throw VaultError.unsupported("The vault's \(name) folder is a symbolic link, so Harness won't use it.") }
+        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
     private func isSymbolicLink(_ url: URL) -> Bool {

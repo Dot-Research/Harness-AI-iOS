@@ -23,7 +23,8 @@ struct MarkdownBlock: Identifiable, Equatable {
 
 enum MarkdownBlocks {
     static func parse(_ fullText: String) -> [MarkdownBlock] {
-        let lines = fullText.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // Same line numbering as toggleTask: "\r\n" and "\n" both end one line.
+        let lines = MarkdownNote.rawLines(fullText).map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
         var index = 0
         // Skip front matter; it's shown as properties.
         if lines.first == "---", let end = lines.dropFirst().firstIndex(where: { $0 == "---" || $0 == "..." }) { index = end + 1 }
@@ -87,7 +88,7 @@ enum MarkdownBlocks {
     }
 
     static func taskItem(_ trimmed: String) -> (done: Bool, text: String)? {
-        for prefix in ["- [ ] ", "* [ ] ", "- [x] ", "* [x] ", "- [X] ", "* [X] "] where trimmed.hasPrefix(prefix) {
+        for prefix in ["- [ ] ", "* [ ] ", "+ [ ] ", "- [x] ", "* [x] ", "+ [x] ", "- [X] ", "* [X] ", "+ [X] "] where trimmed.hasPrefix(prefix) {
             return (prefix.lowercased().contains("x"), String(trimmed.dropFirst(prefix.count)))
         }
         return nil
@@ -101,13 +102,21 @@ enum MarkdownBlocks {
         return (String(digits) + ".", String(rest.dropFirst(2)))
     }
 
-    /// Toggles the checkbox on `line` of `text`.
+    /// Toggles the checkbox of the task on `line` of `text`. Only the box right after the list marker
+    /// changes; line endings are kept.
     static func toggleTask(in text: String, line: Int) -> String {
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var lines = MarkdownNote.rawLines(text)
         guard lines.indices.contains(line) else { return text }
         let current = lines[line]
-        if let range = current.range(of: "[ ] ") { lines[line] = current.replacingCharacters(in: range, with: "[x] ") }
-        else if let range = current.range(of: "[x] ") ?? current.range(of: "[X] ") { lines[line] = current.replacingCharacters(in: range, with: "[ ] ") }
+        let indent = current.prefix { $0 == " " || $0 == "\t" }
+        let rest = current.dropFirst(indent.count)
+        guard let marker = ["- ", "* ", "+ "].first(where: { rest.hasPrefix($0) }) else { return text }
+        let afterMarker = rest.dropFirst(marker.count)
+        let box: String
+        if afterMarker.hasPrefix("[ ] ") { box = "[x]" }
+        else if afterMarker.hasPrefix("[x] ") || afterMarker.hasPrefix("[X] ") { box = "[ ]" }
+        else { return text }
+        lines[line] = String(indent) + marker + box + afterMarker.dropFirst(3)
         return lines.joined(separator: "\n")
     }
 

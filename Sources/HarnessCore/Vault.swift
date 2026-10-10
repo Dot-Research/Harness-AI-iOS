@@ -140,6 +140,13 @@ public enum MarkdownNote {
         return (result, body.hasPrefix("\n") ? String(body.dropFirst()) : body)
     }
 
+    /// Lines split at "\n" only, each keeping a trailing "\r" if it had one, so joining with "\n"
+    /// restores the text exactly. Splits on Unicode scalars: Swift treats "\r\n" as one Character,
+    /// and Foundation's line splitting differs between Apple platforms and Linux.
+    public static func rawLines(_ text: String) -> [String] {
+        text.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
+    }
+
     /// Text of an ATX heading ("## Title" -> "Title"), or nil.
     public static func headingText(_ line: String) -> String? {
         var level = 0
@@ -187,7 +194,7 @@ public enum MarkdownNote {
             let destination = String(rest[open.upperBound..<close])
             rest = rest[rest.index(after: close)...]
             let decoded = destination.removingPercentEncoding ?? destination
-            guard !decoded.contains("://"), !decoded.hasPrefix("/"), !decoded.hasPrefix("#") else { continue }
+            guard !decoded.contains("://"), !decoded.hasPrefix("#") else { continue }
             let (file, heading) = decoded.split(separator: "#", maxSplits: 1).map(String.init).splitFirst()
             guard file.lowercased().hasSuffix(".md") else { continue }
             links.append(WikiLink(target: file, heading: heading, alias: nil, isEmbed: false))
@@ -291,6 +298,12 @@ public struct VaultIndex: Sendable {
         if cleaned.lowercased().hasSuffix(".md") { cleaned = String(cleaned.dropLast(3)) }
         if cleaned.hasPrefix("./") { cleaned = String(cleaned.dropFirst(2)) }
         guard !cleaned.isEmpty else { return nil }
+        if cleaned.hasPrefix("/") {
+            // Vault-absolute: exactly this path from the vault root.
+            guard let path = VaultPath(String(cleaned.drop { $0 == "/" }) + ".md") else { return nil }
+            if notes[path] != nil { return path }
+            return notes.keys.first { $0.rawValue.lowercased() == path.rawValue.lowercased() }
+        }
         if cleaned.contains("/") {
             if let relativeBase = source?.parent, let joined = VaultPath(relativeBase.rawValue + "/" + cleaned + ".md"), notes[joined] != nil { return joined }
             let suffix = "/" + cleaned.lowercased() + ".md"
@@ -317,6 +330,17 @@ public struct VaultIndex: Sendable {
             }
         }
         return result.sorted { ($0.title.lowercased(), $0.context) < ($1.title.lowercased(), $1.context) }
+    }
+
+    /// This index with one note at a different path (to check links before files move).
+    public func moving(_ old: VaultPath, to new: VaultPath) -> VaultIndex {
+        var list = notes.values.filter { $0.path != old }
+        if var moved = notes[old] {
+            moved.path = new
+            moved.note.title = new.title
+            list.append(moved)
+        }
+        return VaultIndex(notes: list)
     }
 
     /// How many other notes link to each note, in one pass (for list rows).
@@ -388,20 +412,50 @@ public struct VaultIndex: Sendable {
     }
 }
 
-/// Renames link targets that point at a renamed note, keeping heading and alias.
+/// Updates links to a note that moved or was renamed, keeping headings and aliases. Links inside code
+/// spans and fenced code are left alone, and every new link is checked to resolve to the moved note.
 public enum VaultLinkRewriter {
-    public static func rewrite(_ text: String, in source: VaultPath, from old: VaultPath, to new: VaultPath, index: VaultIndex) -> String {
-        let newTarget: String = {
-            let others = index.notes.keys.filter { $0 != old && $0.title.lowercased() == new.title.lowercased() }
-            return others.isEmpty ? new.title : String(new.rawValue.dropLast(3))
-        }()
+    public static func rewrite(_ text: String, in source: VaultPath, from old: VaultPath, to new: VaultPath,
+                               before: VaultIndex, after: VaultIndex) -> String {
+        let wiki = target(for: new, from: source, after: after)
+        let markdown = target(for: new, from: source, after: after) + ".md"
+        var inFence = false
+        return MarkdownNote.rawLines(text).map { line -> String in
+            let stripped = line.trimmingCharacters(in: .whitespaces)
+            if stripped.hasPrefix("```") || stripped.hasPrefix("~~~") { inFence.toggle(); return line }
+            if inFence { return line }
+            var output = "", segment = "", inCode = false
+            for character in line {
+                if character == "`" {
+                    output += inCode ? segment : rewriteSegment(segment, source: source, old: old, wiki: wiki, markdown: markdown, before: before)
+                    output.append("`")
+                    segment = ""
+                    inCode.toggle()
+                } else {
+                    segment.append(character)
+                }
+            }
+            return output + (inCode ? segment : rewriteSegment(segment, source: source, old: old, wiki: wiki, markdown: markdown, before: before))
+        }.joined(separator: "\n")
+    }
+
+    /// The shortest link text that resolves to `new` from `source`: its name, its path, or a vault-absolute path.
+    static func target(for new: VaultPath, from source: VaultPath, after: VaultIndex) -> String {
+        let path = String(new.rawValue.dropLast(3))
+        for candidate in [new.title, path] where after.resolve(candidate, from: source) == new { return candidate }
+        return "/" + path
+    }
+
+    private static func rewriteSegment(_ segment: String, source: VaultPath, old: VaultPath, wiki: String, markdown: String, before: VaultIndex) -> String {
+        guard segment.contains("[[") || segment.contains("](") else { return segment }
+        // [[wiki links]]
         var output = ""
-        var rest = Substring(text)
+        var rest = Substring(segment)
         while let open = rest.range(of: "[["), let close = rest[open.upperBound...].range(of: "]]") {
             output += rest[..<open.upperBound]
             let inner = String(rest[open.upperBound..<close.lowerBound])
-            if let link = MarkdownNote.wikiLinks(in: "[[" + inner + "]]").first, index.resolve(link.target, from: source) == old {
-                var replaced = newTarget
+            if let link = MarkdownNote.wikiLinks(in: "[[" + inner + "]]").first, before.resolve(link.target, from: source) == old {
+                var replaced = wiki
                 if let heading = link.heading { replaced += "#" + heading }
                 if let alias = link.alias { replaced += "|" + alias }
                 output += replaced
@@ -411,7 +465,27 @@ public enum VaultLinkRewriter {
             output += "]]"
             rest = rest[close.upperBound...]
         }
-        return output + rest
+        output += rest
+        // [text](Note.md) links
+        guard output.contains("](") else { return output }
+        var result = ""
+        rest = Substring(output)
+        while let open = rest.range(of: "]("), let close = rest[open.upperBound...].firstIndex(of: ")") {
+            result += rest[..<open.upperBound]
+            let destination = String(rest[open.upperBound..<close])
+            let decoded = destination.removingPercentEncoding ?? destination
+            let parts = decoded.split(separator: "#", maxSplits: 1).map(String.init)
+            if let file = parts.first, !decoded.contains("://"), file.lowercased().hasSuffix(".md"), before.resolve(file, from: source) == old {
+                var allowed = CharacterSet.urlPathAllowed
+                allowed.remove(charactersIn: "()")
+                result += (markdown.addingPercentEncoding(withAllowedCharacters: allowed) ?? markdown) + (parts.count > 1 ? "#" + parts[1] : "")
+            } else {
+                result += destination
+            }
+            result += ")"
+            rest = rest[rest.index(after: close)...]
+        }
+        return result + rest
     }
 }
 

@@ -95,11 +95,28 @@ final class VaultIndexTests: XCTestCase {
         XCTAssertTrue(index.search("   ").isEmpty)
     }
 
+    private func rewrite(_ text: String, in source: String, from old: String, to new: String, notes: [VaultNoteSummary]) -> String {
+        let before = VaultIndex(notes: notes)
+        let after = before.moving(VaultPath(old)!, to: VaultPath(new)!)
+        return VaultLinkRewriter.rewrite(text, in: VaultPath(source)!, from: VaultPath(old)!, to: VaultPath(new)!, before: before, after: after)
+    }
+
     func testRenameRewritesOnlyLinksToTheRenamedNote() {
-        let index = VaultIndex(notes: [summary("Pricing.md", ""), summary("Other.md", ""), summary("Plan.md", "")])
-        let text = "See [[Pricing]], [[Pricing#Tiers|tiers]], [[Other]] and `code`."
-        let rewritten = VaultLinkRewriter.rewrite(text, in: VaultPath("Plan.md")!, from: VaultPath("Pricing.md")!, to: VaultPath("Plans and Pricing.md")!, index: index)
-        XCTAssertEqual(rewritten, "See [[Plans and Pricing]], [[Plans and Pricing#Tiers|tiers]], [[Other]] and `code`.")
+        let notes = [summary("Pricing.md", ""), summary("Other.md", ""), summary("Plan.md", "")]
+        let text = "See [[Pricing]], [[Pricing#Tiers|tiers]], [[Other]], [p](Pricing.md#Pro) and `[[Pricing]]`.\r\n```\n[[Pricing]]\n```\n"
+        let rewritten = rewrite(text, in: "Plan.md", from: "Pricing.md", to: "Plans and Pricing.md", notes: notes)
+        XCTAssertEqual(rewritten, "See [[Plans and Pricing]], [[Plans and Pricing#Tiers|tiers]], [[Other]], [p](Plans%20and%20Pricing.md#Pro) and `[[Pricing]]`.\r\n```\n[[Pricing]]\n```\n")
+    }
+
+    func testMovedLinksStillPointAtTheMovedNote() {
+        // Moving Projects/Pricing to the root while Clients/Pricing exists: a bare [[Pricing]] from
+        // Clients/Deal would open Clients/Pricing, so the rewrite uses a vault-absolute link.
+        let notes = [summary("Projects/Pricing.md", ""), summary("Clients/Pricing.md", ""), summary("Clients/Deal.md", "[[Projects/Pricing]]")]
+        let rewritten = rewrite("[[Projects/Pricing]]", in: "Clients/Deal.md", from: "Projects/Pricing.md", to: "Pricing.md", notes: notes)
+        XCTAssertEqual(rewritten, "[[/Pricing]]")
+        let after = VaultIndex(notes: notes).moving(VaultPath("Projects/Pricing.md")!, to: VaultPath("Pricing.md")!)
+        XCTAssertEqual(after.resolve("/Pricing", from: VaultPath("Clients/Deal.md")), VaultPath("Pricing.md"))
+        XCTAssertEqual(after.resolve("Pricing", from: VaultPath("Clients/Deal.md")), VaultPath("Clients/Pricing.md"))
     }
 }
 
@@ -209,14 +226,46 @@ final class VaultStoreTests: XCTestCase {
         XCTAssertEqual(hits, ["Projects/Roadmap.md"])
         let roadmap = try await store.agentRead("Roadmap")
         XCTAssertEqual(roadmap.text, "Launch pricing tiers")
-        do { _ = try await store.agentRead("Clients/Acme.md"); XCTFail("Private folder") } catch VaultError.privateNote { }
-        do { _ = try await store.agentRead("Inbox"); XCTFail("Root is private until allowed") } catch VaultError.privateNote { }
+        do { _ = try await store.agentRead("Clients/Acme.md"); XCTFail("Private folder") } catch VaultError.notReadable { }
+        do { _ = try await store.agentRead("Inbox"); XCTFail("Root is private until allowed") } catch VaultError.notReadable { }
+        // A private note and a missing one get the same answer, so names can't be probed.
+        do { _ = try await store.agentRead("Does Not Exist"); XCTFail("Missing") } catch VaultError.notReadable { }
 
         try await store.setAgentAccess(VaultAccessPolicy.rootKey, readable: true)
         let inbox = try await store.agentRead("Inbox.md")
         XCTAssertEqual(inbox.text, "pricing idea")
         try await store.setAgentAccess("Projects", readable: false)
-        do { _ = try await store.agentRead("Roadmap"); XCTFail("Revoked") } catch VaultError.privateNote { }
+        do { _ = try await store.agentRead("Roadmap"); XCTFail("Revoked") } catch VaultError.notReadable { }
+    }
+
+    func testPrivateNotesCantShadowReadableOnes() async throws {
+        let store = VaultStore(root: root)
+        _ = try await store.createNote(title: "Roadmap", in: VaultPath("Clients"), text: "private plan")
+        _ = try await store.createNote(title: "Roadmap", in: VaultPath("Projects"), text: "shared plan")
+        try await store.setAgentAccess("Projects", readable: true)
+        let note = try await store.agentRead("Roadmap")
+        XCTAssertEqual(note.text, "shared plan")
+    }
+
+    func testNonUTF8NotesAreRefusedRatherThanDamaged() async throws {
+        let store = VaultStore(root: root)
+        try await store.prepare()
+        let latin1 = "- [ ] café".data(using: .isoLatin1)!
+        try latin1.write(to: root.appendingPathComponent("Old.md"))
+        do { _ = try await store.read(VaultPath("Old.md")!); XCTFail("Expected refusal") } catch VaultError.unsupported { }
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("Old.md")), latin1)
+    }
+
+    func testSymlinkedFoldersAreNotFollowedForWrites() async throws {
+        let store = VaultStore(root: root)
+        try await store.prepare()
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("outside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("Daily"), withDestinationURL: outside)
+        do { _ = try await store.dailyNote(); XCTFail("Expected refusal") } catch VaultError.unsupported { }
+        do { _ = try await store.createNote(title: "X", in: VaultPath("Daily")); XCTFail("Expected refusal") } catch VaultError.unsupported { }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: outside.path), [])
     }
 }
 
@@ -244,7 +293,7 @@ final class VaultRuntimeTests: XCTestCase {
         let results = Dictionary(uniqueKeysWithValues: session.messages.filter { $0.role == .tool }.map { ($0.toolCallID ?? "", $0.content) })
         XCTAssertTrue(results["search"]?.contains("Projects/Roadmap.md") ?? false)
         XCTAssertTrue(results["read"]?.contains("Ship the keyboard first.") ?? false)
-        XCTAssertTrue(results["private"]?.contains("private folder") ?? false)
+        XCTAssertTrue(results["private"]?.contains("folders agents can read") ?? false)
         XCTAssertFalse(results.values.contains { $0.contains("Confidential terms") })
         XCTAssertEqual(session.messages.last?.content, "The roadmap ships the keyboard first.")
 

@@ -16,6 +16,8 @@ struct NoteEditorView: View {
     @State private var editing = false
     @State private var dirty = false
     @State private var conflict = false
+    @State private var saving = false
+    @State private var loadError: String?
     @State private var selection: TextSelection?
     @State private var saveTask: Task<Void, Never>?
     @State private var pushed: VaultPath?
@@ -39,6 +41,9 @@ struct NoteEditorView: View {
         Group {
             if !loaded {
                 ProgressView().tint(HarnessTheme.coral).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let loadError {
+                HarnessEmptyState(symbol: "exclamationmark.triangle", title: "Harness can't open this note.", detail: loadError)
+                    .padding(30).frame(maxWidth: 520, maxHeight: .infinity)
             } else if editing {
                 editor
             } else {
@@ -48,8 +53,14 @@ struct NoteEditorView: View {
         .navigationTitle(path.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
-        .task(id: path) { await load() }
-        .onDisappear { saveNow() }
+        .task(id: path) { await load(keepingEdits: true) }
+        .onChange(of: vault.index.notes[path]?.modified) { _, onDisk in
+            // Changed outside this editor (another app, Files, a link update): show it unless you're mid-edit.
+            guard let onDisk, let modified, loaded, loadError == nil, !dirty, !saving,
+                  abs(onDisk.timeIntervalSince(modified)) > 0.001 else { return }
+            Task { await load(keepingEdits: false) }
+        }
+        .onDisappear { saveTask?.cancel(); Task { await save() } }
         .navigationDestination(item: $pushed) { NoteEditorView(vault: vault, path: $0) }
         .environment(\.openURL, OpenURLAction { handle($0) })
         .alert("Rename note", isPresented: $renaming) {
@@ -141,7 +152,7 @@ struct NoteEditorView: View {
             Label("This note changed in another app.", systemImage: "exclamationmark.triangle")
                 .font(.subheadline.weight(.medium)).foregroundStyle(HarnessTheme.amber)
             HStack(spacing: 20) {
-                Button("Use the other version") { Task { await load() } }
+                Button("Use the other version") { Task { await load(keepingEdits: false) } }
                 Button("Keep mine") { Task { await save(overwrite: true) } }
             }.font(.subheadline)
         }
@@ -201,7 +212,8 @@ struct NoteEditorView: View {
     private func stopEditing() {
         editorFocused = false
         editing = false
-        saveNow()
+        saveTask?.cancel()
+        Task { await save() }
     }
 
     // MARK: Toolbar
@@ -210,7 +222,7 @@ struct NoteEditorView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Button(editing ? "Done" : "Edit") { editing ? stopEditing() : startEditing() }
                 .fontWeight(editing ? .semibold : .regular)
-                .disabled(!loaded)
+                .disabled(!loaded || loadError != nil)
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
@@ -222,23 +234,31 @@ struct NoteEditorView: View {
                 Button(role: .destructive) { confirmDelete = true } label: { Label("Move to Trash", systemImage: "trash") }
             } label: { Image(systemName: "ellipsis.circle") }
                 .accessibilityLabel("Note actions")
-                .disabled(!loaded)
+                .disabled(!loaded || loadError != nil)
         }
     }
 
     // MARK: Actions
 
-    private func load() async {
+    /// Reads the note. With `keepingEdits`, unsaved typing survives (the note was renamed or moved
+    /// underneath it) and the next save goes over the current file.
+    private func load(keepingEdits: Bool) async {
         saveTask?.cancel()
         do {
             let document = try await vault.read(path)
-            text = document.text
-            modified = document.modified
-            dirty = false
+            if keepingEdits && dirty {
+                modified = document.modified
+            } else {
+                text = document.text
+                modified = document.modified
+                dirty = false
+            }
             conflict = false
+            loadError = nil
             if document.text.isEmpty && !loaded { editing = true; editorFocused = true }
         } catch {
-            vault.error = error.localizedDescription
+            loadError = error.localizedDescription
+            editing = false
         }
         loaded = true
     }
@@ -253,34 +273,42 @@ struct NoteEditorView: View {
         }
     }
 
+    /// The only writer. One save runs at a time; it keeps going until the file matches the text, so
+    /// typing during a save is saved next. It never writes blind: only with the date it last read or
+    /// wrote, or when you choose "Keep mine".
     private func save(overwrite: Bool = false) async {
-        guard dirty || overwrite else { return }
-        do {
-            modified = try await vault.save(path, text: text, expected: overwrite ? nil : modified)
-            dirty = false
-            conflict = false
-        } catch VaultError.conflict {
-            conflict = true
-        } catch {
-            vault.error = error.localizedDescription
+        guard !saving, loadError == nil else { return }
+        saving = true
+        defer { saving = false }
+        var force = overwrite
+        while dirty || force {
+            guard force || (!conflict && modified != nil) else { return }
+            let snapshot = text
+            do {
+                modified = try await vault.save(path, text: snapshot, expected: force ? nil : modified)
+                conflict = false
+                if text == snapshot { dirty = false }
+            } catch VaultError.conflict {
+                conflict = true
+                return
+            } catch {
+                vault.error = error.localizedDescription
+                return
+            }
+            force = false
         }
     }
 
-    /// Saves right away (leaving the screen, Done). Captures values so it survives the view going away.
-    private func saveNow() {
+    /// Waits for any running save, then saves what's left.
+    private func flush() async {
         saveTask?.cancel()
-        guard dirty, !conflict else { return }
-        let snapshot = text, target = path, expected = modified, vault = vault
-        dirty = false
-        Task {
-            do { _ = try await vault.save(target, text: snapshot, expected: expected) }
-            catch VaultError.conflict { vault.error = "\(target.title) changed in another app, so your last edits weren't saved over it." }
-            catch { vault.error = error.localizedDescription }
-        }
+        while saving { try? await Task.sleep(nanoseconds: 50_000_000) }
+        await save()
     }
 
     private func open(_ destination: VaultPath) {
-        saveNow()
+        saveTask?.cancel()
+        Task { await save() }
         if let openNote { openNote(destination) } else { pushed = destination }
     }
 
@@ -296,15 +324,15 @@ struct NoteEditorView: View {
     }
 
     private func rename() async {
-        // Finish saving before the file moves, so the save can't land on the old path.
-        saveTask?.cancel()
-        await save()
+        // Finish saving before the file moves; if that failed, don't move it.
+        await flush()
+        guard !dirty, !conflict else { vault.error = "Harness couldn't save this note, so it wasn't renamed."; return }
         if let renamed = await vault.rename(path, to: newName) { path = renamed }
     }
 
     private func move(to folder: VaultPath?) async {
-        saveTask?.cancel()
-        await save()
+        await flush()
+        guard !dirty, !conflict else { vault.error = "Harness couldn't save this note, so it wasn't moved."; return }
         if let moved = await vault.move(path, to: folder) { path = moved }
     }
 

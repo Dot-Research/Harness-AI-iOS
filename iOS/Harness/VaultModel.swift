@@ -18,6 +18,11 @@ final class VaultModel: ObservableObject {
 
     let store: VaultStore
     private var scopedURL: URL?
+    /// Notes renamed or moved this session, old path -> new path. A save from an editor that still
+    /// holds the old path (it closed as the note moved) goes to the new one.
+    private var movedPaths: [VaultPath: VaultPath] = [:]
+    /// Notes moved to the trash this session; late saves to them are dropped instead of failing.
+    private var deletedPaths: Set<VaultPath> = []
     private static let bookmarkKey = "vault.folderBookmark"
 
     static var defaultRoot: URL {
@@ -64,7 +69,9 @@ final class VaultModel: ObservableObject {
     func read(_ path: VaultPath) async throws -> VaultDocument { try await store.read(path) }
 
     func save(_ path: VaultPath, text: String, expected: Date?) async throws -> Date {
-        let modified = try await store.write(path, text: text, expectedModified: expected)
+        let target = movedPaths[path] ?? path
+        if deletedPaths.contains(target) { return expected ?? Date() }
+        let modified = try await store.write(target, text: text, expectedModified: expected)
         index = (try? await store.index()) ?? index
         return modified
     }
@@ -82,15 +89,28 @@ final class VaultModel: ObservableObject {
     }
 
     func rename(_ path: VaultPath, to title: String) async -> VaultPath? {
-        await perform { try await self.store.rename(path, to: title).path }
+        guard let result = await perform({ try await self.store.rename(path, to: title) }) else { return nil }
+        return record(result, from: path)
     }
 
     func move(_ path: VaultPath, to folder: VaultPath?) async -> VaultPath? {
-        await perform { try await self.store.move(path, to: folder) }
+        guard let result = await perform({ try await self.store.move(path, to: folder) }) else { return nil }
+        return record(result, from: path)
     }
 
     func delete(_ path: VaultPath) async {
-        _ = await perform { try await self.store.delete(path) }
+        deletedPaths.insert(path)
+        if await perform({ try await self.store.delete(path) }) == nil { deletedPaths.remove(path) }
+    }
+
+    private func record(_ result: VaultMove, from old: VaultPath) -> VaultPath {
+        for (key, value) in movedPaths where value == old { movedPaths[key] = result.path }
+        movedPaths[old] = result.path
+        movedPaths[result.path] = nil
+        if !result.failedNotes.isEmpty {
+            error = "Moved, but links in \(result.failedNotes.map(\.title).joined(separator: ", ")) couldn't be updated because they changed meanwhile."
+        }
+        return result.path
     }
 
     /// Opens (or creates) the note a `[[link]]` points at.
