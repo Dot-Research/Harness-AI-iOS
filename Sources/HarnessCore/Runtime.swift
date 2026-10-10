@@ -35,13 +35,14 @@ public actor AgentRuntime {
     private let store: any HarnessStore
     private let providers: [any ModelProvider]
     private let externalExecutor: (any ExternalToolExecutor)?
+    private let vault: (any VaultReading)?
     private let permissions: PermissionKernel
     private var activeSessions: Set<UUID> = []
     private let maxRounds = 8
     private let maxCalls = 24
 
-    public init(store: any HarnessStore, providers: [any ModelProvider], externalExecutor: (any ExternalToolExecutor)? = nil) {
-        self.store = store; self.providers = providers; self.externalExecutor = externalExecutor
+    public init(store: any HarnessStore, providers: [any ModelProvider], externalExecutor: (any ExternalToolExecutor)? = nil, vault: (any VaultReading)? = nil) {
+        self.store = store; self.providers = providers; self.externalExecutor = externalExecutor; self.vault = vault
         self.permissions = PermissionKernel(store: store)
     }
 
@@ -155,6 +156,7 @@ public actor AgentRuntime {
         HarnessTools.all.filter { definition in
             guard profile.capabilities.contains(definition.capability) else { return false }
             if definition.name == "agent_delegate" { return depth == 0 && profile.id == "god" }
+            if definition.name.hasPrefix("vault_") { return vault != nil }
             if [.computerRead, .computerWrite, .computerExecute].contains(definition.capability) {
                 return externalExecutor != nil && state.devices.contains { $0.capabilities.contains(definition.capability) }
             }
@@ -245,6 +247,18 @@ public actor AgentRuntime {
                 let matches = (state.files[file.rawValue] ?? "").split(separator: "\n").filter { line in words.contains { line.lowercased().contains($0) } }
                 return "[\(file.rawValue)]\n" + matches.prefix(20).joined(separator: "\n")
             }.joined(separator: "\n\n")
+        case "vault_search":
+            guard let vault else { throw RuntimeError.unknownTool(call.name) }
+            let hits = try await vault.agentSearch(try string("query", call), limit: 10)
+            if hits.isEmpty { return "No matching notes in folders agents can read. Private folders are not searched." }
+            // Plain lines read better than JSON for small models, and keep paths unescaped for vault_read.
+            return hits.map { "- \($0.path.rawValue) (\($0.title)): \($0.snippet)" }.joined(separator: "\n")
+        case "vault_read":
+            guard let vault else { throw RuntimeError.unknownTool(call.name) }
+            let document = try await vault.agentRead(try string("path", call))
+            let limit = 20_000
+            let text = document.text.count > limit ? String(document.text.prefix(limit)) + "\n[truncated]" : document.text
+            return "[Vault/\(document.path.rawValue)]\n\(text)"
         case "skill_manage":
             let title = try string("title", call), markdown = try string("markdown", call), evidence = try string("evidence", call)
             guard markdown.count <= 50_000 else { throw RuntimeError.invalidArguments("Skill proposal is too large.") }

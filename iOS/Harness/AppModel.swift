@@ -23,6 +23,8 @@ final class AppModel: ObservableObject {
     private var cancellationRequested = false
     private var permissionContinuation: CheckedContinuation<PermissionAnswer, Never>?
     private let companion = CompanionClient()
+    /// Markdown notes. Agents read only folders the user marks readable (see VaultAccessPolicy).
+    let vault = VaultModel()
 
     init() { Task { await initialize() } }
     var currentSession: AgentSession? { state.sessions.first { $0.id == sessionID } }
@@ -81,7 +83,7 @@ final class AppModel: ObservableObject {
             }
         }
         providers = available
-        if !isWorking { runtime = AgentRuntime(store: store, providers: available, externalExecutor: companion) }
+        if !isWorking { runtime = AgentRuntime(store: store, providers: available, externalExecutor: companion, vault: vault.store) }
     }
     private func change(_ mutation: @escaping @Sendable (inout HarnessState) -> Void) async {
         guard let store else { error = "The local store is unavailable."; return }
