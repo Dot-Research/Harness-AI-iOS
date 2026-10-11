@@ -8,6 +8,40 @@ jobs:
     container: swift:6.2
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - run: apt-get update && apt-get install -y libsqlite3-dev python3 openssl
-      - run: swift test -j 4
-      - run: PYTHONPATH=companion python3 -m unittest discover -s companion/tests -v
+      - run: apt-get update && apt-get install -y libsqlite3-dev
+      - name: HarnessCore tests
+        run: set -o pipefail; swift test -j 4 2>&1 | tee core.log
+        shell: bash
+      - if: failure()
+        run: .github/scripts/annotate-failure.sh core.log "HarnessCore tests"
+        shell: bash
+
+  companion:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Companion tests
+        run: |
+          set -o pipefail
+          python3 --version; openssl version
+          PYTHONPATH=companion python3 -m unittest discover -s companion/tests -v 2>&1 | tee companion.log
+      - if: failure()
+        run: .github/scripts/annotate-failure.sh companion.log "Companion tests"
+
+  dictation:
+    runs-on: ubuntu-24.04
+    container: swift:6.2
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: apt-get update && apt-get install -y python3
+      - name: Dictation tests
+        run: set -o pipefail; swift test --package-path Packages/HarnessDictation -j 4 2>&1 | tee dictation.log
+        shell: bash
+      - name: Type-check SwiftUI and UIKit sources against framework stubs
+        run: |
+          set -o pipefail
+          { Packages/HarnessDictation/Tools/LinuxTypeCheck/check.sh && Packages/HarnessDictation/Tools/LinuxTypeCheck/check.sh strict; } 2>&1 | tee -a dictation.log
+        shell: bash
+      - if: failure()
+        run: .github/scripts/annotate-failure.sh dictation.log "Dictation"
+        shell: bash

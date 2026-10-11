@@ -1,12 +1,14 @@
 import SwiftUI
 import HarnessCore
+import DictationAppKit
 
-private enum HarnessTab: String, CaseIterable, Identifiable {
-    case god = "GOD", agents = "Agents", red = "Red", me = "Me"
+enum HarnessTab: String, CaseIterable, Identifiable {
+    case god = "GOD", dictation = "Dictation", agents = "Agents", red = "Red", me = "Me"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .god: return "sparkle"
+        case .dictation: return "mic"
         case .agents: return "square.stack.3d.up"
         case .red: return "circle.hexagongrid"
         case .me: return "person.crop.circle"
@@ -16,7 +18,7 @@ private enum HarnessTab: String, CaseIterable, Identifiable {
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var selected: HarnessTab = .god
+    @EnvironmentObject private var dictation: DictationHost
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -29,9 +31,9 @@ struct RootView: View {
                     navigationRail
                     Rectangle().fill(HarnessTheme.border).frame(width: 1)
                 }
-                TabView(selection: $selected) {
+                TabView(selection: $model.selectedTab) {
                     ForEach(HarnessTab.allCases) { tab in
-                        NavigationStack { destination(tab) }
+                        tabRoot(tab)
                             .tabItem { Label(tab.rawValue, systemImage: tab.symbol) }
                             .tag(tab)
                             .toolbar(usesRail ? .hidden : .visible, for: .tabBar)
@@ -63,20 +65,20 @@ struct RootView: View {
                     .lineLimit(1).minimumScaleFactor(0.8).accessibilityHidden(true)
                 VStack(spacing: 10) {
                     ForEach(HarnessTab.allCases) { tab in
-                        Button { selected = tab } label: {
+                        Button { model.selectedTab = tab } label: {
                             VStack(spacing: 8) {
                                 Image(systemName: tab.symbol).font(.title3)
                                 Text(tab.rawValue).font(.caption.weight(.medium))
                             }
-                            .foregroundStyle(selected == tab ? HarnessTheme.coral : HarnessTheme.secondary)
+                            .foregroundStyle(model.selectedTab == tab ? HarnessTheme.coral : HarnessTheme.secondary)
                             .frame(maxWidth: .infinity, minHeight: 65)
-                            .background(selected == tab ? HarnessTheme.coral.opacity(0.09) : .clear,
+                            .background(model.selectedTab == tab ? HarnessTheme.coral.opacity(0.09) : .clear,
                                         in: RoundedRectangle(cornerRadius: 16))
                             .contentShape(RoundedRectangle(cornerRadius: 16))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(tab.rawValue)
-                        .accessibilityAddTraits(selected == tab ? .isSelected : [])
+                        .accessibilityAddTraits(model.selectedTab == tab ? .isSelected : [])
                     }
                 }
             }
@@ -88,9 +90,21 @@ struct RootView: View {
         .accessibilityLabel("Main navigation")
     }
 
+    @ViewBuilder private func tabRoot(_ tab: HarnessTab) -> some View {
+        if tab == .dictation {
+            // DictationTabView brings its own NavigationStack.
+            DictationTabView(host: dictation)
+                .scrollContentBackground(.hidden)
+                .background(HarnessTheme.background)
+        } else {
+            NavigationStack { destination(tab) }
+        }
+    }
+
     @ViewBuilder private func destination(_ tab: HarnessTab) -> some View {
         switch tab {
         case .god: ConversationView()
+        case .dictation: EmptyView()
         case .agents: AgentsView()
         case .red: RedView()
         case .me: MeView()

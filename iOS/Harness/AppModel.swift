@@ -13,6 +13,9 @@ final class AppModel: ObservableObject {
     @Published var pendingDecision: PermissionDecision?
     @Published private(set) var appleModelAvailable = AppleModelProvider.isAvailable
     @Published private(set) var appleModelAvailabilityDescription = AppleModelProvider.availabilityDescription
+    @Published var selectedTab: HarnessTab = .god
+    /// Text handed to GOD from elsewhere (Ask Harness in the keyboard); the composer takes it once.
+    @Published var composerPrefill: String?
     private var store: SQLiteHarnessStore?
     private var runtime: AgentRuntime?
     private var providers: [any ModelProvider] = []
@@ -161,6 +164,12 @@ final class AppModel: ObservableObject {
         continuation?.resume(returning: answer)
     }
     func clearError() { error = nil }
+    /// Opens GOD with `text` in the composer for the user to review and send. Nothing is sent automatically.
+    func prefillComposer(_ text: String) {
+        let trimmed = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(16_000))
+        selectedTab = .god
+        composerPrefill = trimmed.isEmpty ? nil : trimmed
+    }
     func reactivate() async {
         guard store != nil, !isWorking else { return }
         do { try await refresh() } catch { self.error = error.localizedDescription }

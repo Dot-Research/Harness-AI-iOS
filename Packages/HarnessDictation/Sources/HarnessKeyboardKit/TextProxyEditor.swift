@@ -1,0 +1,129 @@
+#if os(iOS)
+import UIKit
+import DictationCore
+
+/// All edits to the host app's text go through here so the last change can be undone.
+@MainActor
+final class TextProxyEditor {
+    private let proxy: @MainActor () -> UITextDocumentProxy?
+
+    /// The last change: what was removed and what was inserted in its place.
+    private(set) var lastEdit: (removed: String, inserted: String)?
+
+    init(proxy: @escaping @MainActor () -> UITextDocumentProxy?) {
+        self.proxy = proxy
+    }
+
+    var context: InsertionContext {
+        guard let p = proxy() else { return InsertionContext() }
+        return InsertionContext(before: p.documentContextBeforeInput, after: p.documentContextAfterInput, selectedText: p.selectedText)
+    }
+
+    var fieldTraits: FieldTraits {
+        guard let p = proxy() else { return FieldTraits() }
+        let contentType: UITextContentType? = p.textContentType ?? nil
+        return FieldTraits(
+            keyboardType: p.keyboardType.map(Self.name(for:)),
+            returnKeyType: p.returnKeyType.map(Self.name(for:)),
+            textContentType: contentType?.rawValue
+        )
+    }
+
+    /// Inserts dictated text, fitted to what's around the cursor.
+    func insertDictation(_ text: String, languageCode: String?) {
+        guard let p = proxy() else { return }
+        let selected = p.selectedText ?? ""
+        let fitted = InsertionPlanner.fit(text, into: context, languageCode: languageCode)
+        guard !fitted.isEmpty else { return }
+        p.insertText(fitted) // replaces the selection, if any
+        lastEdit = (removed: selected, inserted: fitted)
+    }
+
+    /// The text Fix/Rewrite/Ask should work on: the selection, else the current paragraph before
+    /// the cursor (as much of it as the host app lets a keyboard see).
+    func rewriteTarget() -> (text: String, isSelection: Bool)? {
+        guard let p = proxy() else { return nil }
+        if let selected = p.selectedText, !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (selected, true)
+        }
+        guard let before = p.documentContextBeforeInput, !before.isEmpty else { return nil }
+        let paragraph = before.components(separatedBy: "\n").last ?? before
+        guard !paragraph.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return (paragraph, false)
+    }
+
+    /// Replaces the rewrite target with new text.
+    func replaceTarget(_ target: (text: String, isSelection: Bool), with replacement: String) {
+        guard let p = proxy() else { return }
+        if target.isSelection {
+            p.insertText(replacement)
+        } else {
+            // Only delete if the text before the cursor is still exactly what was read.
+            guard let before = p.documentContextBeforeInput, before.hasSuffix(target.text) else { return }
+            for _ in 0..<target.text.count { p.deleteBackward() }
+            p.insertText(replacement)
+        }
+        lastEdit = (removed: target.text, inserted: replacement)
+    }
+
+    var canUndo: Bool {
+        guard let lastEdit, let before = proxy()?.documentContextBeforeInput else { return false }
+        return before.hasSuffix(lastEdit.inserted)
+    }
+
+    func undo() {
+        guard canUndo, let lastEdit, let p = proxy() else { return }
+        for _ in 0..<lastEdit.inserted.count { p.deleteBackward() }
+        if !lastEdit.removed.isEmpty { p.insertText(lastEdit.removed) }
+        self.lastEdit = nil
+    }
+
+    // MARK: Basic keys
+
+    func insert(_ s: String) {
+        proxy()?.insertText(s)
+        lastEdit = nil
+    }
+
+    func deleteBackward() {
+        proxy()?.deleteBackward()
+        lastEdit = nil
+    }
+
+    // MARK: UIKit enum names (the core is UIKit-free)
+
+    nonisolated static func name(for type: UIKeyboardType) -> String {
+        switch type {
+        case .asciiCapable: return "asciiCapable"
+        case .numbersAndPunctuation: return "numbersAndPunctuation"
+        case .URL: return "URL"
+        case .numberPad: return "numberPad"
+        case .phonePad: return "phonePad"
+        case .namePhonePad: return "namePhonePad"
+        case .emailAddress: return "emailAddress"
+        case .decimalPad: return "decimalPad"
+        case .twitter: return "twitter"
+        case .webSearch: return "webSearch"
+        case .asciiCapableNumberPad: return "asciiCapableNumberPad"
+        default: return "default"
+        }
+    }
+
+    nonisolated static func name(for type: UIReturnKeyType) -> String {
+        switch type {
+        case .go: return "go"
+        case .google: return "google"
+        case .join: return "join"
+        case .next: return "next"
+        case .route: return "route"
+        case .search: return "search"
+        case .send: return "send"
+        case .yahoo: return "yahoo"
+        case .done: return "done"
+        case .emergencyCall: return "emergencyCall"
+        case .continue: return "continue"
+        default: return "default"
+        }
+    }
+}
+#endif
