@@ -14,6 +14,8 @@
         <key>CFBundleURLSchemes</key><array><string>harness</string></array>
     </dict></array>
     <key>LSRequiresIPhoneOS</key><true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+    <key>UIFileSharingEnabled</key><true/>
     <key>NSCameraUsageDescription</key><string>Scan a one-use QR code to securely pair your computer. Camera access is requested only when you choose to scan.</string>
     <key>NSFaceIDUsageDescription</key><string>Authorize sensitive agent actions, including computer command execution.</string>
     <key>NSMicrophoneUsageDescription</key><string>Harness turns your voice into text when you tap Dictate. Audio is processed and discarded, never saved.</string>

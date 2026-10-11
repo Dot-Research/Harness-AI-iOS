@@ -34,6 +34,10 @@ struct ConversationView: View {
                 Button { showSessions = true } label: { Image(systemName: "clock.arrow.circlepath") }
                     .accessibilityLabel("Conversation history")
             }
+            ToolbarItem(placement: .topBarLeading) {
+                NavigationLink { AgentsView() } label: { Image(systemName: "square.stack.3d.up") }
+                    .accessibilityLabel("Agents")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { Task { await model.newSession() } } label: { Image(systemName: "square.and.pencil") }
                     .disabled(model.isWorking).accessibilityLabel("New conversation")

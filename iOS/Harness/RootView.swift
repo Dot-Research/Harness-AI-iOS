@@ -3,13 +3,13 @@ import HarnessCore
 import DictationAppKit
 
 enum HarnessTab: String, CaseIterable, Identifiable {
-    case god = "GOD", dictation = "Dictation", agents = "Agents", red = "Red", me = "Me"
+    case god = "Agent", dictation = "Dictation", red = "Red", vault = "Vault", me = "Me"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .god: return "sparkle"
         case .dictation: return "mic"
-        case .agents: return "square.stack.3d.up"
+        case .vault: return "books.vertical"
         case .red: return "circle.hexagongrid"
         case .me: return "person.crop.circle"
         }
@@ -105,7 +105,7 @@ struct RootView: View {
         switch tab {
         case .god: ConversationView()
         case .dictation: EmptyView()
-        case .agents: AgentsView()
+        case .vault: VaultView(vault: model.vault)
         case .red: RedView()
         case .me: MeView()
         }
