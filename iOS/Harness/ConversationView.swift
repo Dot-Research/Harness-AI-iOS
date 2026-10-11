@@ -40,6 +40,12 @@ struct ConversationView: View {
             }
         }
         .sheet(isPresented: $showSessions) { sessions }
+        .onChange(of: model.composerPrefill, initial: true) { _, text in
+            guard let text else { return }
+            draft = text
+            model.composerPrefill = nil
+            composerFocused = true
+        }
         .harnessScreen()
     }
 

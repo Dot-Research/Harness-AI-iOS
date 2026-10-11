@@ -19,24 +19,62 @@ objects = []
 def obj(name, body):
     objects.append(f"\t\t{ident(name)} = {{ {body} }};")
 
+def file_kind(path):
+    return {".swift": "sourcecode.swift", ".xcassets": "folder.assetcatalog", ".entitlements": "text.plist.entitlements"}.get(path.suffix, "text.plist.xml")
+
+def ids(prefix, paths, kind):
+    return ",".join(ident(f"{prefix}{kind}:{p.name}") for p in paths)
+
+# App target: iOS/Harness
 sources = sorted((IOS / "Harness").glob("*.swift"))
 assert sources, "No app sources"
 resources = [IOS / "Harness" / "Assets.xcassets", IOS / "Harness" / "PrivacyInfo.xcprivacy"]
-for path in sources + resources + [IOS / "Harness" / "Info.plist"]:
-    kind = "sourcecode.swift" if path.suffix == ".swift" else "folder.assetcatalog" if path.suffix == ".xcassets" else "text.plist.xml"
-    obj("file:" + path.name, f"isa = PBXFileReference; lastKnownFileType = {kind}; path = {quote(path.name)}; sourceTree = \"<group>\";")
+app_other = [IOS / "Harness" / "Info.plist", IOS / "Harness" / "Harness.entitlements"]
+for path in sources + resources + app_other:
+    obj("file:" + path.name, f"isa = PBXFileReference; lastKnownFileType = {file_kind(path)}; path = {quote(path.name)}; sourceTree = \"<group>\";")
 for path in sources + resources:
     obj("build:" + path.name, f"isa = PBXBuildFile; fileRef = {ident('file:' + path.name)};")
+
+# Keyboard extension target: iOS/HarnessKeyboard (ids are prefixed; file names repeat across targets)
+KBD = IOS / "HarnessKeyboard"
+kbd_sources = sorted(KBD.glob("*.swift"))
+assert kbd_sources, "No keyboard sources"
+kbd_resources = [KBD / "PrivacyInfo.xcprivacy"]
+kbd_other = [KBD / "Info.plist", KBD / "HarnessKeyboard.entitlements"]
+for path in kbd_sources + kbd_resources + kbd_other:
+    obj("kbd-file:" + path.name, f"isa = PBXFileReference; lastKnownFileType = {file_kind(path)}; path = {quote(path.name)}; sourceTree = \"<group>\";")
+for path in kbd_sources + kbd_resources:
+    obj("kbd-build:" + path.name, f"isa = PBXBuildFile; fileRef = {ident('kbd-file:' + path.name)};")
+
 obj("app", 'isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Harness.app; sourceTree = BUILT_PRODUCTS_DIR;')
-obj("group-app", f"isa = PBXGroup; children = ({','.join(ident('file:' + p.name) for p in sources + resources + [IOS / 'Harness' / 'Info.plist'])}); path = Harness; sourceTree = \"<group>\";")
-obj("products", f"isa = PBXGroup; children = ({ident('app')}); name = Products; sourceTree = \"<group>\";")
-obj("root-group", f"isa = PBXGroup; children = ({ident('group-app')},{ident('products')}); sourceTree = \"<group>\";")
-obj("sources", f"isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({','.join(ident('build:' + p.name) for p in sources)}); runOnlyForDeploymentPostprocessing = 0;")
-obj("resources", f"isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ({','.join(ident('build:' + p.name) for p in resources)}); runOnlyForDeploymentPostprocessing = 0;")
+obj("appex", 'isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = HarnessKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR;')
+obj("group-app", f"isa = PBXGroup; children = ({ids('', sources + resources + app_other, 'file')}); path = Harness; sourceTree = \"<group>\";")
+obj("group-keyboard", f"isa = PBXGroup; children = ({ids('kbd-', kbd_sources + kbd_resources + kbd_other, 'file')}); path = HarnessKeyboard; sourceTree = \"<group>\";")
+obj("products", f"isa = PBXGroup; children = ({ident('app')},{ident('appex')}); name = Products; sourceTree = \"<group>\";")
+obj("root-group", f"isa = PBXGroup; children = ({ident('group-app')},{ident('group-keyboard')},{ident('products')}); sourceTree = \"<group>\";")
+obj("sources", f"isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({ids('', sources, 'build')}); runOnlyForDeploymentPostprocessing = 0;")
+obj("resources", f"isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ({ids('', resources, 'build')}); runOnlyForDeploymentPostprocessing = 0;")
+obj("kbd-sources", f"isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({ids('kbd-', kbd_sources, 'build')}); runOnlyForDeploymentPostprocessing = 0;")
+obj("kbd-resources", f"isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ({ids('kbd-', kbd_resources, 'build')}); runOnlyForDeploymentPostprocessing = 0;")
+
+# Local packages: the portable core at the repo root, and the dictation package.
 obj("local-package", 'isa = XCLocalSwiftPackageReference; relativePath = ..;')
-obj("core-product", f"isa = XCSwiftPackageProductDependency; package = {ident('local-package')}; productName = HarnessCore;")
-obj("core-build", f"isa = PBXBuildFile; productRef = {ident('core-product')};")
-obj("frameworks", f"isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ({ident('core-build')}); runOnlyForDeploymentPostprocessing = 0;")
+obj("dictation-package", 'isa = XCLocalSwiftPackageReference; relativePath = ../Packages/HarnessDictation;')
+def product(name, package):
+    obj(f"product:{name}", f"isa = XCSwiftPackageProductDependency; package = {ident(package)}; productName = {name};")
+    obj(f"product-build:{name}", f"isa = PBXBuildFile; productRef = {ident('product:' + name)};")
+app_products = [("HarnessCore", "local-package"), ("DictationAppKit", "dictation-package"), ("DictationEngine", "dictation-package")]
+kbd_products = [("HarnessKeyboardKit", "dictation-package")]
+for name, package in app_products + kbd_products:
+    product(name, package)
+obj("frameworks", f"isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ({','.join(ident('product-build:' + n) for n, _ in app_products)}); runOnlyForDeploymentPostprocessing = 0;")
+obj("kbd-frameworks", f"isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ({','.join(ident('product-build:' + n) for n, _ in kbd_products)}); runOnlyForDeploymentPostprocessing = 0;")
+
+# The app embeds and depends on the keyboard extension.
+obj("embed-appex", f"isa = PBXBuildFile; fileRef = {ident('appex')}; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }};")
+obj("embed-extensions", f"isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = \"\"; dstSubfolderSpec = 13; files = ({ident('embed-appex')}); name = \"Embed Foundation Extensions\"; runOnlyForDeploymentPostprocessing = 0;")
+obj("kbd-proxy", f"isa = PBXContainerItemProxy; containerPortal = {ident('project')}; proxyType = 1; remoteGlobalIDString = {ident('kbd-target')}; remoteInfo = HarnessKeyboard;")
+obj("kbd-dependency", f"isa = PBXTargetDependency; target = {ident('kbd-target')}; targetProxy = {ident('kbd-proxy')};")
 
 for mode in ["Debug", "Release"]:
     common = {
@@ -53,14 +91,24 @@ for mode in ["Debug", "Release"]:
         "GENERATE_INFOPLIST_FILE": "NO", "TARGETED_DEVICE_FAMILY": "1", "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator",
         "SUPPORTS_MACCATALYST": "NO", "CODE_SIGN_STYLE": "Automatic", "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
         "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks", "MARKETING_VERSION": "0.1.0", "CURRENT_PROJECT_VERSION": "1",
+        "CODE_SIGN_ENTITLEMENTS": "Harness/Harness.entitlements",
     }
-    for kind, settings in [("project", common), ("target", app)]:
+    keyboard = {
+        "PRODUCT_BUNDLE_IDENTIFIER": "org.harness.ios.keyboard", "PRODUCT_NAME": "$(TARGET_NAME)", "INFOPLIST_FILE": "HarnessKeyboard/Info.plist",
+        "GENERATE_INFOPLIST_FILE": "NO", "TARGETED_DEVICE_FAMILY": "1", "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator",
+        "SUPPORTS_MACCATALYST": "NO", "CODE_SIGN_STYLE": "Automatic", "SKIP_INSTALL": "YES",
+        "CODE_SIGN_ENTITLEMENTS": "HarnessKeyboard/HarnessKeyboard.entitlements",
+        "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks",
+        "MARKETING_VERSION": "0.1.0", "CURRENT_PROJECT_VERSION": "1",
+    }
+    for kind, settings in [("project", common), ("target", app), ("kbd-target", keyboard)]:
         values = ' '.join(f"{key} = {quote(value)};" for key, value in settings.items())
         obj(f"{kind}-{mode}", f"isa = XCBuildConfiguration; buildSettings = {{ {values} }}; name = {mode};")
-for kind in ["project", "target"]:
+for kind in ["project", "target", "kbd-target"]:
     obj(f"{kind}-configs", f"isa = XCConfigurationList; buildConfigurations = ({ident(kind + '-Debug')},{ident(kind + '-Release')}); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;")
-obj("target", f"isa = PBXNativeTarget; buildConfigurationList = {ident('target-configs')}; buildPhases = ({ident('sources')},{ident('frameworks')},{ident('resources')}); buildRules = (); dependencies = (); name = Harness; packageProductDependencies = ({ident('core-product')}); productName = Harness; productReference = {ident('app')}; productType = \"com.apple.product-type.application\";")
-obj("project", f"isa = PBXProject; attributes = {{ BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2600; TargetAttributes = {{ {ident('target')} = {{ CreatedOnToolsVersion = 26.0; }}; }}; }}; buildConfigurationList = {ident('project-configs')}; compatibilityVersion = \"Xcode 14.0\"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en,Base); mainGroup = {ident('root-group')}; packageReferences = ({ident('local-package')}); productRefGroup = {ident('products')}; projectDirPath = \"\"; projectRoot = \"\"; targets = ({ident('target')});")
+obj("target", f"isa = PBXNativeTarget; buildConfigurationList = {ident('target-configs')}; buildPhases = ({ident('sources')},{ident('frameworks')},{ident('resources')},{ident('embed-extensions')}); buildRules = (); dependencies = ({ident('kbd-dependency')}); name = Harness; packageProductDependencies = ({','.join(ident('product:' + n) for n, _ in app_products)}); productName = Harness; productReference = {ident('app')}; productType = \"com.apple.product-type.application\";")
+obj("kbd-target", f"isa = PBXNativeTarget; buildConfigurationList = {ident('kbd-target-configs')}; buildPhases = ({ident('kbd-sources')},{ident('kbd-frameworks')},{ident('kbd-resources')}); buildRules = (); dependencies = (); name = HarnessKeyboard; packageProductDependencies = ({','.join(ident('product:' + n) for n, _ in kbd_products)}); productName = HarnessKeyboard; productReference = {ident('appex')}; productType = \"com.apple.product-type.app-extension\";")
+obj("project", f"isa = PBXProject; attributes = {{ BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2600; TargetAttributes = {{ {ident('target')} = {{ CreatedOnToolsVersion = 26.0; }}; {ident('kbd-target')} = {{ CreatedOnToolsVersion = 26.0; }}; }}; }}; buildConfigurationList = {ident('project-configs')}; compatibilityVersion = \"Xcode 14.0\"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en,Base); mainGroup = {ident('root-group')}; packageReferences = ({ident('local-package')},{ident('dictation-package')}); productRefGroup = {ident('products')}; projectDirPath = \"\"; projectRoot = \"\"; targets = ({ident('target')},{ident('kbd-target')});")
 (PROJECT / "project.pbxproj").write_text("// !$*UTF8*$!\n{\n\tarchiveVersion = 1;\n\tclasses = {};\n\tobjectVersion = 60;\n\tobjects = {\n" + '\n'.join(objects) + f"\n\t}};\n\trootObject = {ident('project')};\n}}\n")
 scheme = PROJECT / "xcshareddata" / "xcschemes"
 scheme.mkdir(parents=True, exist_ok=True)
@@ -74,4 +122,4 @@ reference = f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentif
 <AnalyzeAction buildConfiguration="Debug"/><ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
 </Scheme>
 ''')
-print(f"Generated {PROJECT.relative_to(ROOT)} with {len(sources)} Swift files")
+print(f"Generated {PROJECT.relative_to(ROOT)}: Harness ({len(sources)} Swift files) and HarnessKeyboard ({len(kbd_sources)})")
