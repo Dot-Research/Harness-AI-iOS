@@ -45,12 +45,24 @@ Ask Me is the default. Approved changes compare the original content inside an a
 
 ## Storage and privacy evidence
 
-SQLite transactions commit session, learning and audit changes together. Collections use typed Codable records. Invalid data is reported and preserved; the app does not silently reset the user's store. The iOS database directory and files use data protection; credentials use Keychain independently.
+Each store mutation commits its typed collections transactionally. A complete agent turn uses multiple mutations for session state, learning and audit entries; it is not one transaction across the entire run. Invalid data is reported and preserved; the app does not silently reset the user's store. The iOS database directory and files use data protection; credentials use Keychain independently.
 
 Activity distinguishes context prepared for an authorized request from a successful provider response. It records selected message context, tool inputs/results, permission decisions, provider/token metadata when reported, and learning outcomes. These are application observations, not packet captures. An authorized request can fail without establishing delivery; a successful response still cannot prove remote retention practices. No model interpretation alone establishes security.
 
 ## iPhone-first presentation
 
-The app target is iPhone on iOS 26+. Compact widths show GOD/Agents/Red/Me tabs; expanded widths show the same navigation in a sidebar. Layout follows available geometry rather than model-name checks. Native safe areas, scrolling and Dynamic Type are used. Device eligibility is discovered through Apple APIs, and unavailable model/camera paths have explicit UI states.
+The app target is iPhone on iOS 26+. Compact widths show Dot/Speak/Social/.md/Me tabs. Expanded widths place workspace left, content center and navigation right. Layout follows available geometry rather than model-name checks. Native safe areas, scrolling and Dynamic Type are used. Device eligibility is discovered through Apple APIs, and unavailable model/camera paths have explicit UI states.
 
-The source does not assume unannounced dimensions, hinges, split-screen modes or model capabilities for iPhone 18 Pro or iPhone Duo. Physical-device validation is necessary once those targets are available. The app cancels active work on backgrounding; long-running jobs belong on an explicitly paired worker in a later durable task protocol.
+Physical-device validation is necessary for recording, keyboard handoff, biometric approval and layout behavior. Director work cancels on backgrounding. The companion now implements owner-scoped start/status/cancel for up to 30-minute jobs, with idempotent retries, cancellation tombstones and bounded retained results. Jobs last only while that process runs; they are not durable across restarts. Manual ended-turn recovery controls are not exposed yet.
+
+## Speak layers
+
+`DictationCore` owns portable cleanup, prompts, instruction-file validation, routing, session and insertion rules. `DictationEngine` implements iOS audio/Speech adapters, shared instruction storage and Apple text models. `DictationAppKit` owns the microphone session and rewrite lifecycle. `HarnessKeyboardKit` owns controls, bridge requests, insertion and undo. Request IDs reject late outcomes; rewrite targets compare document identity and visible selection/cursor context before replacement.
+
+Transcription and text cleanup are separate. Shared `Speak/instruction.md` is read for Polish, Fix and Rewrite. Local rewriting is the default. Optional iOS 27 PCC needs explicit routing, build configuration, entitlement and availability/quota. Failed local-only processing never silently uploads text.
+
+The app owns the microphone; Full Access does not remove keyboard restrictions. Secure fields and apps rejecting custom keyboards remain unsupported. Manual activation and Start Speak shortcuts provide foreground entry paths. The responder-chain URL opener is experimental, not an approved extension API or proven device behavior.
+
+## Social layers
+
+Portable `SocialClient` and draft models live in `HarnessCore`; native `SocialModel` and views own account/presentation state. The standalone SQLite HTTP service owns sessions, posts/threads, profiles, follows, mutes and reactions. It has its own credential boundary, independent of companion trust. Native use requires a configured HTTPS origin; local HTTP is a test option. Browser Social uses explicitly local demonstration data.

@@ -90,6 +90,7 @@ for mode in ["Debug", "Release"]:
         "PRODUCT_BUNDLE_IDENTIFIER": "org.harness.ios", "PRODUCT_NAME": "$(TARGET_NAME)", "INFOPLIST_FILE": "Harness/Info.plist",
         "GENERATE_INFOPLIST_FILE": "NO", "TARGETED_DEVICE_FAMILY": "1", "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator",
         "SUPPORTS_MACCATALYST": "NO", "CODE_SIGN_STYLE": "Automatic", "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
+        "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
         "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks", "MARKETING_VERSION": "0.1.0", "CURRENT_PROJECT_VERSION": "1",
         "CODE_SIGN_ENTITLEMENTS": "Harness/Harness.entitlements",
     }

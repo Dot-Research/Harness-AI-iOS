@@ -3,14 +3,15 @@ import HarnessCore
 import DictationAppKit
 
 enum HarnessTab: String, CaseIterable, Identifiable {
-    case god = "Agent", dictation = "Dictation", red = "Red", vault = "Vault", me = "Me"
+    case god = "Dot", dictation = "Speak", red = "Social", vault = ".md", me = "Me"
     var id: String { rawValue }
+    var accent: Color { self == .red ? HarnessTheme.purple : HarnessTheme.coral }
     var symbol: String {
         switch self {
         case .god: return "sparkle"
         case .dictation: return "mic"
-        case .vault: return "books.vertical"
-        case .red: return "circle.hexagongrid"
+        case .vault: return "doc.text"
+        case .red: return "bubble.left.and.bubble.right"
         case .me: return "person.crop.circle"
         }
     }
@@ -27,10 +28,6 @@ struct RootView: View {
             // Keep a single TabView mounted so opening more space does not discard
             // an in-progress draft or any tab's navigation history.
             HStack(spacing: 0) {
-                if usesRail {
-                    navigationRail
-                    Rectangle().fill(HarnessTheme.border).frame(width: 1)
-                }
                 TabView(selection: $model.selectedTab) {
                     ForEach(HarnessTab.allCases) { tab in
                         tabRoot(tab)
@@ -39,8 +36,13 @@ struct RootView: View {
                             .toolbar(usesRail ? .hidden : .visible, for: .tabBar)
                     }
                 }
+                .tint(model.selectedTab.accent)
                 .toolbarBackground(HarnessTheme.surface, for: .tabBar)
                 .toolbarBackground(.visible, for: .tabBar)
+                if usesRail {
+                    Rectangle().fill(HarnessTheme.border).frame(width: 1)
+                    navigationRail
+                }
             }
             .harnessScreen()
         }
@@ -70,9 +72,9 @@ struct RootView: View {
                                 Image(systemName: tab.symbol).font(.title3)
                                 Text(tab.rawValue).font(.caption.weight(.medium))
                             }
-                            .foregroundStyle(model.selectedTab == tab ? HarnessTheme.coral : HarnessTheme.secondary)
+                            .foregroundStyle(model.selectedTab == tab ? tab.accent : HarnessTheme.secondary)
                             .frame(maxWidth: .infinity, minHeight: 65)
-                            .background(model.selectedTab == tab ? HarnessTheme.coral.opacity(0.09) : .clear,
+                            .background(model.selectedTab == tab ? tab.accent.opacity(0.09) : .clear,
                                         in: RoundedRectangle(cornerRadius: 16))
                             .contentShape(RoundedRectangle(cornerRadius: 16))
                         }
@@ -96,6 +98,8 @@ struct RootView: View {
             DictationTabView(host: dictation)
                 .scrollContentBackground(.hidden)
                 .background(HarnessTheme.background)
+        } else if tab == .god {
+            NavigationStack { ConversationView() }.id(model.directorNavigationID)
         } else {
             NavigationStack { destination(tab) }
         }

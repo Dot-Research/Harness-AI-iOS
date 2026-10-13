@@ -5,7 +5,7 @@ import UIKit
 import DictationCore
 import DictationEngine
 
-/// The Dictation tab: try it, set up the keyboard, and control how speech becomes text.
+/// The Speak space: try dictation, set up the system-wide keyboard, and control how speech becomes text.
 public struct DictationTabView: View {
     @ObservedObject var host: DictationHost
     @ObservedObject var store: DictationSettingsStore
@@ -30,7 +30,31 @@ public struct DictationTabView: View {
         NavigationStack(path: $path) {
             List {
                 Section {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("Your voice, wherever you type.", systemImage: "keyboard")
+                            .font(.headline)
+                        Text("Speak brings dictation to the Harness keyboard across your apps. The system-wide keyboard is included in a Harness subscription.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        if let message = host.accessDecision.denialMessage {
+                            Label(message, systemImage: "lock")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Label(setupComplete ? "Keyboard set up" : "Finish keyboard setup below", systemImage: setupComplete ? "checkmark.circle" : "keyboard.badge.ellipsis")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(setupComplete ? Color.green : Color.secondary)
+                    }
+                    .padding(.vertical, 6)
+                    if setupComplete {
+                        Button("Keyboard settings") { openSettings() }
+                    }
+                } footer: {
+                    Text("Check access in Me → Harness subscription. iOS uses its own keyboard in secure fields, and some apps don't allow custom keyboards.")
+                }
+
+                Section {
                     TryDictationView(host: host)
+                } header: {
+                    Text("Try Speak")
                 } footer: {
                     Text("Audio is processed in memory and discarded. It's never saved.")
                 }
@@ -41,6 +65,11 @@ public struct DictationTabView: View {
 
                 if host.status.phase != .inactive {
                     micSessionSection
+                }
+
+                Section("Your voice") {
+                    NavigationLink("Edit instruction.md", value: Destination.instructions)
+                    NavigationLink("AI rewrite route") { AppleRewriteSettingsView(store: store) }
                 }
 
                 Section("Modes") {
@@ -141,7 +170,7 @@ public struct DictationTabView: View {
                     Text("Off by default. Only text is kept, on this iPhone, never audio.")
                 }
             }
-            .navigationTitle("Dictation")
+            .navigationTitle("Speak")
             .navigationDestination(for: Destination.self) { destination in
                 switch destination {
                 case let .mode(id): ModeEditorView(store: store, modeID: id)
@@ -149,6 +178,7 @@ public struct DictationTabView: View {
                 case .language: LanguagePickerView(store: store)
                 case .dictionary: PersonalDictionaryView(store: store)
                 case .history: HistoryView(host: host)
+                case .instructions: DictationInstructionsView(store: host.instructionsStore)
                 }
             }
             .task { await refresh() }
@@ -163,6 +193,7 @@ public struct DictationTabView: View {
                 switch section {
                 case "dictionary": path.append(Destination.dictionary)
                 case "history": path.append(Destination.history)
+                case "instructions", "rewrite": path.append(Destination.instructions)
                 default: break
                 }
             }
@@ -170,7 +201,7 @@ public struct DictationTabView: View {
     }
 
     enum Destination: Hashable {
-        case mode(String), cloud, language, dictionary, history
+        case mode(String), cloud, language, dictionary, history, instructions
     }
 
     // MARK: Setup
@@ -188,7 +219,7 @@ public struct DictationTabView: View {
             SetupRow(done: fullAccess, title: "Allow Full Access", detail: "Lets the keyboard reach the Harness app on this iPhone. Nothing you type is collected.") {
                 openSettings()
             }
-            SetupRow(done: micPermission == .granted, title: "Allow the microphone", detail: micPermission == .denied ? "Turn it on in Settings > Harness." : "Harness records only while you dictate.") {
+            SetupRow(done: micPermission == .granted, title: "Allow the microphone", detail: micPermission == .denied ? "Turn it on in Settings > Harness." : "The microphone stays active during a warm session, with iOS's orange indicator. Turn off Keep mic ready to stop after each dictation.") {
                 if micPermission == .undetermined {
                     Task {
                         _ = await AudioCapture.requestPermission()
@@ -198,7 +229,7 @@ public struct DictationTabView: View {
                     openSettings()
                 }
             }
-            SetupRow(done: onDeviceReady, title: "Download the speech model", detail: availability?.onDeviceSupported == false ? "Your language isn't available on device yet. Pair a computer or set up a cloud endpoint." : "One-time download so dictation works offline.") {
+            SetupRow(done: onDeviceReady, title: "Download the speech model", detail: availability?.onDeviceSupported == false ? "Your language isn't available on device yet. Choose another language or set up a cloud endpoint." : "One-time download so dictation works offline.") {
                 Task {
                     let locale = settings.languageCode.map(Locale.init(identifier:)) ?? Locale.current
                     let transcriber = OnDeviceTranscriber(locale: locale, contextualStrings: [])
@@ -208,7 +239,9 @@ public struct DictationTabView: View {
                 }
             }
         } header: {
-            Text("Set up")
+            Text("Set up the system-wide keyboard")
+        } footer: {
+            Text("After setup, hold the globe key in any app and choose Harness.")
         }
     }
 
@@ -328,6 +361,7 @@ struct TryDictationView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(activeID == nil ? .primary : .red)
+                .disabled(activeID == nil && !host.accessDecision.isAllowed)
             }
         }
         .onChange(of: host.latestLocalOutcome) { _, outcome in

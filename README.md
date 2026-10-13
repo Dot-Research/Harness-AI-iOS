@@ -1,90 +1,117 @@
 # Harness
 
-**Version 0.1.0**
+<img src="preview/logo.png" width="128" height="128" alt="Harness: white and black horses on red, 馬到成功">
 
-A local-first personal agent for iPhone, with a portable Swift agent core and an explicitly paired computer worker. The initial interface prioritizes **iPhone 18 Pro and iPhone Duo** through compact and expanded layouts rather than hard-coded device dimensions. Device features are checked at runtime; no unconfirmed hardware capabilities are assumed.
+**Version 0.1.0 · iOS development build**
 
-This is an initial MVP implementation, not an App Store release. The original specification is in [the product brief](docs/PRODUCT_BRIEF.md).
+Five spaces: **Dot → Speak → Social → .md → Me**. Dot is the General Orchestrator Director conversation; Speak is the dictation keyboard; Social is a purple thread-based network; .md is portable Markdown; Me starts with connections and SSH.
 
-Planned device support: **Fold8 Ultra 1TB: 16GB soon...**
+Harness has real functional layers and tested device/service adapters. Signing, subscription products, service configuration and physical-device acceptance are still required before release.
 
 ## See the interface
 
-Open [the self-contained interactive preview](preview/harness-preview.html) in a browser, or serve `preview/` with `python3 -m http.server 4173 --directory preview`. Switch between **iPhone 18** and **iPhone Duo** to explore compact tabs and the expanded workspace panel. Try GOD, Agents, Red, Me, learning approval, Journey, and editable agent files.
+![Current Harness interface: Dot, Speak, Social, Markdown and Me](preview/harness-interface.png)
 
-This is a browser design study using sample data and deterministic example replies, not an iOS simulator. It makes no model requests, accepts no API keys, and retains changes only in memory until reload. The native app uses actual runtime status and starts without sample learning proposals. Social counts in the preview illustrate the planned Red community; the native MVP has a curated local collection. Preview dimensions are layout test sizes, not hardware specifications.
+![Expanded Harness layout: workspace left, content center, navigation right](preview/harness-duo.png)
 
-![Harness interface preview](preview/harness-interface.png)
+Open [the self-contained interactive preview](preview/harness-preview.html), or serve it:
 
-The native SwiftUI implementation keeps the conversation and navigation mounted when changing width; larger layouts reveal a navigation rail and contextual workspace panel. Accessibility text sizes collapse the extra panel. Screenshots and preview build instructions are in [preview/README.md](preview/README.md).
+```sh
+python3 -m http.server 4173 --bind 127.0.0.1 --directory preview
+```
 
-## Run the iPhone app
+Visit `http://127.0.0.1:4173`. **Compact** uses five bottom tabs. **Expanded** places workspace left, content center and navigation right. These are responsive layout examples, not device specifications or native screenshots.
 
-Requires **macOS, Xcode 26 or later, and iOS 26 or later**. Use an Xcode release that supports your physical device's installed OS (including the current iOS 27 SDK for iPhone Duo acceptance). Open `iOS/Harness.xcodeproj`, select the shared **Harness** scheme, set your signing team and a unique bundle identifier, and run on your iPhone. Apple Intelligence must be enabled and its model downloaded for on-device generation; cloud access is optional.
+The preview supports local drafts/conversations, sample dictation cleanup, Social posts/threads/replies, Markdown editing/search/backlinks/export and disconnected connection profiles. It saves examples in browser local storage. It performs no real recording, inference, SSH, public posting or purchases. See [preview details and captures](preview/README.md).
 
-The checked-in project uses the local `HarnessCore` and `HarnessDictation` packages and needs no third-party Swift dependencies. It has two targets: the Harness app and the Harness Keyboard extension, sharing the App Group `group.org.harness.ios` (create it for your team, or change it in both `.entitlements` files, to run on a device). Regenerate it after adding app files:
+## Functional layers
+
+```mermaid
+flowchart TB
+  UI[SwiftUI: Dot / Speak / Social / .md / Me]
+  Core[HarnessCore: runtime, permissions, notes, SQLite]
+  Rules[DictationCore: cleanup, prompts, routing and session rules]
+  Adapters[iOS adapters: Apple models, Speech, Keychain, pinned HTTP]
+  Host[DictationHost: app microphone and rewrite lifecycle]
+  Keyboard[Keyboard: controls, insertion and undo]
+  Companion[Paired computer: files, execution and agent jobs]
+  Social[Social service: accounts, threads and SQLite]
+  UI --> Core
+  UI --> Host
+  Host --> Rules
+  Host --> Adapters
+  Keyboard --> Rules
+  Keyboard <-->|App Group bridge| Host
+  Core --> Adapters
+  Adapters --> Companion
+  Adapters --> Social
+```
+
+`HarnessCore` has no SwiftUI dependency. It owns bounded turns, provider/executor protocols, permissions, notes, persistence and learning. Speak separates portable `DictationCore`, iOS `DictationEngine`, app-side `DictationAppKit` and extension-side `HarnessKeyboardKit`. Credentials stay in Keychain; network/device adapters implement the protocol boundaries. Views consume these functions; model text does not become permissions.
+
+Details: [architecture](docs/ARCHITECTURE.md), [Speak](Packages/HarnessDictation/README.md), [companion](companion/README.md), [Social service](social_service/README.md).
+
+## Implemented behavior
+
+- **Dot:** saved conversations, bounded tool turns, independently permissioned specialists, learning review and an audit trail. Saved pi-coding-agent, Claude Code and Hermes routes use paired computers or their SSH aliases. Approval shows the exact command; a route changed after approval is rejected.
+- **Remote jobs:** pinned HTTPS, owner-scoped idempotent start/status/cancel, bounded output and up to 30-minute execution. Results remain for one hour. Jobs are process-local; restarting the companion ends them. Ordinary synchronous commands retain a 60-second limit.
+- **Speak:** on-device Apple Speech transcription, an optional configured speech endpoint, local cleanup/dictionary, Fix/Rewrite and insertion/undo. Shared `Speak/instruction.md` controls Polish, Fix and Rewrite, with validated atomic saving and Markdown import/export. Cancellation and field/selection checks protect late results.
+- **Apple text models:** local rewriting by default; explicit PCC or local/PCC fallback on iOS 27. PCC is disabled until developer approval/provisioning, then checks runtime availability and quota. Foundation Models edits transcript text; Speech handles transcription.
+- **Subscription:** verified StoreKit transactions gate Speak recording/keyboard starts, with purchase/restore/manage, expiry, revocation and verified billing grace. Empty product configuration grants no access.
+- **Social:** purple timeline, threads/replies, profiles, following, mutes, likes/reposts, plus a separate persisted service and account/session handling. The direction is broad expression with minimal censorship; deployment policy remains the operator's responsibility.
+- **.md:** portable Markdown, search, wikilinks/backlinks, tags, import/export, coordinated saves and conflict checks. Agents read only user-approved folders.
+- **Me:** connections/SSH first, followed by models, subscription, intelligence and privacy/activity.
+
+Dot's default Apple adapter is text-only. Tool orchestration requires a configured tool-capable local or OpenAI-compatible provider. Speak's Apple text-editing pipeline is separate.
+
+## Run on iPhone
+
+Requires macOS, **Xcode 26+ and iOS 26+**. Use Xcode 27 for the optional PCC adapter. Open `iOS/Harness.xcodeproj`, select **Harness**, configure your signing team/bundle identifiers, and run on a supported iPhone.
+
+Register the shared `group.org.harness.ios` App Group for your team, or update both entitlement files and group configuration. The project uses local Swift packages, with no third-party Swift dependencies. Regenerate after adding app source files:
 
 ```sh
 python3 scripts/generate-project.py
-```
-
-Unsigned simulator build on a Mac:
-
-```sh
 xcodebuild -project iOS/Harness.xcodeproj -scheme Harness \
   -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-The app starts with local-only routing and learning set to **Ask Me**. In **Me → Providers**, OpenRouter is the recommended optional cloud route: enter an API key and a model identifier supported by your account, then select Balanced or Cloud preferred. Direct OpenAI-compatible endpoints and loopback local model servers are also supported. Keys go into Apple Keychain and are never stored in context files or session records. Remote endpoints require HTTPS; redirects are refused.
+Configure models in **Me → Models & providers**. Keys use Keychain; remote endpoints require HTTPS and reject credentialed redirects. Pair machines through **Me → Connections & SSH** using the [companion instructions](companion/README.md).
 
-The Apple adapter calls `FoundationModels.SystemLanguageModel` and `LanguageModelSession` for real on-device text generation. It handles model availability, cancellation, context limits, unsupported languages, refusals, and temporary busy states. It does **not** execute tools in this build. Select a tool-capable OpenAI-compatible local or cloud model to use the full agent loop. Routing currently follows your local/balanced/cloud preference; cost, latency and capability-based automatic model selection remains future work.
+Populate `HarnessSubscriptionProductIDs` with real auto-renewable App Store Connect IDs to enable paid Speak. For PCC, obtain [Apple's approval and entitlement](https://developer.apple.com/private-cloud-compute/), configure provisioning, then enable `HarnessPrivateCloudEnabled`. Local flags and example IDs do not grant real entitlements.
 
-## What is implemented
+## iOS dictation restrictions
 
-- Five adaptive native tabs: GOD, Dictation, Agents, Red, and Me; expanded widths use a navigation rail and live workspace panel. The director can be renamed without changing its role.
-- **Harness Keyboard** and the Dictation tab ([Packages/HarnessDictation](Packages/HarnessDictation/README.md)): a system-wide dictation keyboard with Dictate | Fix | Rewrite | Ask Harness, on-device transcription by default (Apple SpeechAnalyzer), optional cloud endpoint, on-device cleanup of fillers and self-corrections, and no audio retention. Ask Harness opens GOD with the text in the composer.
-- A presentation-independent, bounded agent loop with sequential tool calls, scoped specialist delegation, cancellation, saved sessions, and context windows that retain complete tool-call/result groups.
-- Local SQLite records for sessions, separate SOUL/USER/MEMORY/AGENTS files, skills, learning proposals, Journey, settings, and an inspectable activity trail. Agent files support Markdown import/export.
-- Metadata-first skill recall using keyword relevance and recorded outcomes; lazy procedure loading; versioned editing, disabling and deletion. Learned skills start disabled and never gain native privileges automatically. Embeddings and bundled skill scripts are not implemented.
-- A restricted local Learning Reviewer with no external tools; deterministic explicit-preference fallback, approval/edit/rejection, stale-write protection, and reversible Journey entries. Automatic mode applies only tightly validated, explicitly evidenced preference updates; skill changes still require review.
-- A deterministic permission kernel outside the model. Agent profiles impose capability ceilings; saved rules cannot remove biometric approval for sensitive actions. Specialists do not inherit GOD's permissions. Denials and approvals are audited.
-- Optional HTTPS computer pairing with expiring single-use QR codes, exact certificate pinning, independently selected phone/node capabilities, confined file access, and biometric-approved command execution. See [companion setup](companion/README.md).
-- A local curated **Red prototype**, with capability disclosures and restricted install/fork flows. It is not connected to a public social service.
-- Privacy settings with an editable audit prompt, deterministic client observations and optional model interpretation through normal consent. Authorized request context is inspectable locally; an audit does not certify security or a provider's retention behavior.
+The **app owns the microphone**. The keyboard sends App Group commands and inserts returned text. Full Access does not grant microphone access. Secure fields use Apple's keyboard, and apps may reject custom keyboards.
 
-## Test the core and companion
+Start Speak in Harness or with its **Start Speak** shortcut, then return to the text field. A warm session can avoid repeated switching while iOS permits it. The microphone stays active with the orange system indicator until stopped or expired. Cold sessions and interruptions need recovery; permanent background recording is not promised.
 
-Swift 6.2, SQLite development headers, Python 3.11+, and OpenSSL are sufficient. On macOS, Xcode supplies the Swift/SQLite prerequisites. On Linux, install the SQLite development package for your distribution.
+The responder-chain keyboard-to-app URL path is experimental, not a supported extension API or proof of App Review acceptance. Manual/shortcut activation and microphone-to-field behavior need physical testing. See [device QA](Packages/HarnessDictation/docs/QA_CHECKLIST.md) and [draft review notes](Packages/HarnessDictation/docs/APP_REVIEW.md).
+
+## Verification
 
 ```sh
-swift test -j 4
-PYTHONPATH=companion python3 -m unittest discover -s companion/tests -v
+swift test
 swift test --package-path Packages/HarnessDictation
-Packages/HarnessDictation/Tools/LinuxTypeCheck/check.sh   # SwiftUI/UIKit type-check without an Apple SDK
+PYTHONPATH=companion python3 -m unittest discover -s companion/tests -v
+python3 -m unittest social_service.test_service -v
+python3 -m social_service.test_swift_client --scratch-path /tmp/harness-social-client
+node --test preview/model.test.cjs
 ```
 
-In the prepared Codex cloud environment:
+macOS uses Xcode's Swift compiler. Linux requires Swift 6.2, SQLite headers, Python 3.11+ and OpenSSL. Two Social HTTP tests intentionally skip in a plain core run; the fixture runner starts an isolated real service and exercises them explicitly.
 
-```sh
-source /workspace/toolchains/env.sh
-bash scripts/check.sh
-```
+The updated native app/keyboard passed unsigned simulator and iPhone Xcode builds. Speak's portable suite passed 109 tests, and an actual local Apple model preserved a synthetic correction. These checks do not prove physical recording/insertion, App Store transactions, PCC eligibility or production services. GitHub CI covers core, dictation and companion checks, with native builds on macOS; the Social service/client and preview checks above also passed locally.
 
-The cloud machine has a signature-verified Swift 6.2 toolchain and authenticated SQLite packages outside the checkout. It can build and test `HarnessCore` and the companion; it cannot compile SwiftUI, access an iOS simulator, exercise Keychain/Face ID/camera, or run Apple Foundation Models. CI runs the core, companion and dictation checks on Linux, and builds the app and keyboard with Xcode on macOS (`.github/workflows/macos.yml`, when app, package or companion code changes). Device acceptance remains required.
+## Remaining setup
 
-## Device acceptance on a Mac
+- Signing/App Group, real subscription products and physical cold/warm recording, interruption, insertion/undo and layout testing.
+- PCC developer approval for optional cloud text editing.
+- A deployed HTTPS Social origin/account and operator policy.
+- Paired machines with installed/authenticated agents and known SSH hosts. Manual recovery controls for a retained job after its turn ends are not exposed yet.
+- Paired-computer STT, hosted speech infrastructure and Diction-style remote audio streaming remain disconnected. BYO cloud STT and on-device live partials are already implemented separately.
 
-Use available simulator identifiers from `xcrun simctl list devices available`; do not substitute invented device profiles. Validate compact and expanded widths, rotation, Dynamic Type, keyboard clearance and permission sheets. On physical target devices, verify Apple model availability, Keychain persistence, cloud denial with no request, exact TLS pin mismatch rejection, QR expiry/replay, capability revocation and cancellation. iPhone Duo layout behavior needs verification on the actual available hardware/SDK.
+Director work cancels when the app backgrounds. Companion execution is separately granted computer-user access, not a filesystem sandbox. Sessions/audits use iOS data protection rather than custom database encryption. No analytics SDK, telemetry endpoint or embedded credential is included.
 
-## Current boundaries
-
-HomeKit, SSH, Shortcuts, Calendar, Reminders, Contacts, Messages/Notes, a public Red backend, account sync and persistent background execution are not part of this first build. Conversations and skills work locally, but offline tool orchestration needs a configured tool-capable local endpoint. The app cancels active work when entering the background; it does not promise a permanently running iOS process.
-
-macOS/Linux companion filesystem isolation uses descriptor-based path checks and has been tested on Linux. Windows filesystem tools fail closed; experimental Windows pairing/command execution requires owner-only credential ACLs and still needs native verification. Command execution is a powerful, separately granted capability and is not confined to the selected file root.
-
-No analytics SDK, telemetry endpoint or embedded credential is included. User-selected providers and explicitly paired computers receive only authorized requests. Locally retained sessions and audit records may contain sensitive user content; they remain in the protected application sandbox. There is no custom database encryption beyond iOS data protection.
-
-Architecture and security boundaries are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Licensed under Apache 2.0.
-
-Platform references: [Apple Foundation Models](https://developer.apple.com/documentation/foundationmodels/generating-content-and-performing-tasks-with-foundation-models) and [Apple's iPhone Duo announcement](https://www.apple.com/newsroom/2026/09/apple-unveils-iphone-duo/). Device-specific acceptance remains unverified until tested with the appropriate Apple SDK and hardware.
+Licensed under Apache 2.0. The selected horse artwork is preserved exactly as supplied for the logo and icon.

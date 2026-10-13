@@ -64,7 +64,30 @@ public struct SessionMachine: Sendable {
         self.config = config
     }
 
-    public mutating func handle(_ event: Event, now: Date) -> [Effect] {
+    public mutating func handle(_ event: Event, now: Date, access: DictationAccessDecision = .allowed) -> [Effect] {
+        // Gate the common session boundary so a warm keyboard session has exactly the same
+        // access rules as a foreground recording. The default preserves existing library clients.
+        if case let .denied(message) = access {
+            let error = BridgeError(.subscriptionRequired, message)
+            var effects: [Effect] = []
+            let previousID = activeRequest?.id
+            if let previousID {
+                // Deliver before abortCapture clears the host's local request tracking.
+                effects += [.fail(previousID, error), .abortCapture(previousID)]
+            }
+            if phase != .inactive { effects.append(.stopAudio) }
+            phase = .inactive
+            activeRequest = nil
+            warmUntil = nil
+            captureStartedAt = nil
+            finishingStartedAt = nil
+            audioLost = false
+            endAfterFinish = false
+            if case let .start(request) = event, request.id != previousID {
+                effects.append(.fail(request.id, error))
+            }
+            return effects
+        }
         switch event {
         case .activate:
             if phase == .inactive {

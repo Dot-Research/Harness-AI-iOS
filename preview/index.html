@@ -4,27 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
-  <link rel="icon" href="data:,">
+  <link id="harness-favicon" rel="icon" type="image/png" href="logo.png">
   <title>Harness — iOS interface preview</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="preview-header">
-    <div class="wordmark"><span class="tiny-mark">h</span> Harness <span class="preview-tag">iOS INTERFACE</span></div>
-    <div class="device-switch" aria-label="Preview layout"><button data-device="phone">iPhone 18</button><button data-device="duo" class="active">iPhone Duo</button></div>
-    <button class="reset-preview" id="reset">Reset preview ↺</button>
+    <div class="wordmark"><img class="tiny-mark" data-harness-logo src="logo.png" alt="Harness horse painting, 馬到成功"> Harness <span class="preview-tag">Five spaces</span></div>
+    <div class="device-switch" aria-label="Preview layout"><button data-device="phone">Compact</button><button data-device="duo" class="active">Expanded</button></div>
+    <button class="reset-preview" id="reset">Reset preview</button>
   </header>
   <main class="stage">
     <div class="device duo" id="device">
       <div class="system-bar"><span>9:41</span><span class="system-right">▮▮▮ <span>◔</span><span class="battery"></span></span></div>
       <div class="app-shell">
-        <nav class="side-nav" aria-label="Main navigation"></nav>
+        <aside class="context-panel" id="context" aria-label="Workspace"></aside>
         <div class="main-column">
           <header class="app-header" id="app-header"></header>
           <div class="content-scroll" id="content" tabindex="-1"></div>
           <div id="composer"></div>
         </div>
-        <aside class="context-panel" id="context"></aside>
+        <nav class="side-nav" aria-label="Main navigation"></nav>
       </div>
       <nav class="bottom-nav" aria-label="Main navigation"></nav>
       <div class="home-indicator"></div>
@@ -32,7 +32,8 @@
       <div class="toast" id="toast" role="status"></div>
     </div>
   </main>
-  <footer class="preview-footer"><span class="preview-dot"></span> Interactive design preview <span>·</span> Sample data, no model calls <span>·</span> Adaptive layouts, not device-accurate simulation</footer>
+  <footer class="preview-footer"><span class="preview-dot"></span> Interactive design preview <span>·</span> Local examples, saved in your browser <span>·</span> Adaptive layouts, not device-accurate simulation</footer>
+  <script src="model.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

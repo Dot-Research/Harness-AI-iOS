@@ -8,27 +8,44 @@ struct MeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                HStack(alignment: .center, spacing: 18) {
-                    Image(systemName: "person.crop.circle")
-                        .font(.system(size: 62, weight: .ultraLight)).foregroundStyle(HarnessTheme.amber)
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text("Your own intelligence.").font(.system(.title2, design: .serif))
-                        Text("Local identity. No account required.")
-                            .font(.caption).foregroundStyle(HarnessTheme.secondary)
-                    }
-                }.padding(.vertical, 14)
+                SectionEyebrow(title: "Connections & SSH")
                 HarnessCard {
-                    VStack(alignment: .leading, spacing: 13) {
-                        HStack {
-                            Text("A personal node, on your terms.").font(.subheadline.weight(.medium))
-                            Spacer()
-                            Image(systemName: "iphone.gen3").foregroundStyle(HarnessTheme.coral)
+                    VStack(alignment: .leading, spacing: 16) {
+                        NavigationLink { DevicesView() } label: {
+                            SettingsRow(symbol: "laptopcomputer.and.iphone", title: "Connections & SSH", subtitle: connectionSummary, color: HarnessTheme.coral)
                         }
-                        Text("Conversations, skills, and learning live on this iPhone. You choose the models and devices that can receive context.")
-                            .font(.subheadline).foregroundStyle(HarnessTheme.secondary).lineSpacing(4)
-                    }
+                        Text("Manage the computers and SSH routes Dot can use. You choose each connection's permissions.")
+                            .font(.caption).foregroundStyle(HarnessTheme.secondary).lineSpacing(4)
+                    }.buttonStyle(.plain)
                 }
-                SectionEyebrow(title: "Make it yours")
+
+                SectionEyebrow(title: "Models & providers")
+                HarnessCard {
+                    NavigationLink { ProvidersView() } label: {
+                        SettingsRow(symbol: "cpu", title: "Models & providers", subtitle: model.state.routingPreference.rawValue, color: HarnessTheme.coral)
+                    }.buttonStyle(.plain)
+                }
+
+                SectionEyebrow(title: "Account & subscription")
+                HarnessCard {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(spacing: 15) {
+                            Image(systemName: "person.crop.circle")
+                                .font(.system(size: 38, weight: .light)).foregroundStyle(HarnessTheme.amber)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Your local identity").font(.body.weight(.medium))
+                                Text("Your conversations and preferences live on this iPhone.")
+                                    .font(.caption).foregroundStyle(HarnessTheme.secondary)
+                            }
+                        }
+                        Divider()
+                        NavigationLink { SubscriptionView() } label: {
+                            SettingsRow(symbol: "keyboard", title: "Harness subscription", subtitle: "Includes Speak and the system-wide keyboard", color: HarnessTheme.coral)
+                        }
+                    }.buttonStyle(.plain)
+                }
+
+                SectionEyebrow(title: "Your intelligence")
                 HarnessCard {
                     VStack(spacing: 14) {
                         NavigationLink { IntelligenceView() } label: {
@@ -44,17 +61,10 @@ struct MeView: View {
                         }
                     }.buttonStyle(.plain)
                 }
-                SectionEyebrow(title: "Connections & trust")
+
+                SectionEyebrow(title: "Privacy & activity")
                 HarnessCard {
                     VStack(spacing: 14) {
-                        NavigationLink { ProvidersView() } label: {
-                            SettingsRow(symbol: "cpu", title: "Models & providers", subtitle: model.state.routingPreference.rawValue, color: HarnessTheme.coral)
-                        }
-                        Divider()
-                        NavigationLink { DevicesView() } label: {
-                            SettingsRow(symbol: "desktopcomputer", title: "Devices", subtitle: "\(model.state.devices.count) paired computers", color: HarnessTheme.coral)
-                        }
-                        Divider()
                         NavigationLink { PrivacyView() } label: {
                             SettingsRow(symbol: "hand.raised", title: "Privacy", subtitle: "See where your information goes", color: HarnessTheme.green)
                         }
@@ -70,7 +80,7 @@ struct MeView: View {
                         Link(destination: URL(string: "https://github.com/zeldangelo/Harness-AI-iOS")!) {
                             Label("Read the source", systemImage: "curlybraces").font(.subheadline.weight(.medium))
                         }
-                        Text("Harness is open source. Apple integrations and the system keyboard are future work; this build focuses on the agent loop.")
+                        Text("Harness is open source. Your notes are portable Markdown, and you choose which models and devices receive your context.")
                             .font(.caption).foregroundStyle(HarnessTheme.secondary).lineSpacing(4)
                     }
                 }
@@ -80,8 +90,13 @@ struct MeView: View {
             TextField("Name", text: $name)
             Button("Save") { Task { await model.renameDirector(name) } }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("Its role remains General Orchestration Director.") }
+        } message: { Text("Dot's role remains General Orchestrator Director.") }
         .harnessScreen()
+    }
+
+    private var connectionSummary: String {
+        let count = model.state.devices.count
+        return count == 0 ? "Pair a computer or set up SSH" : "\(count) paired \(count == 1 ? "computer" : "computers") · manage SSH"
     }
 }
 

@@ -1,33 +1,44 @@
-# Harness interface preview
+# Harness five-space preview
 
-Open `harness-preview.html` in a browser. This single file contains the styles, icons, and interactions; it works without a web server or network connection. If your browser disallows local file URLs, serve this directory normally:
+Open `harness-preview.html` in a browser. This portable file includes all styles, icons, state, interactions, and the full approved horse-painting logo. The original logo bytes are embedded once and reused for the favicon, wordmark, navigation, and Dot hero; the artwork and 馬到成功 lettering are shown without cropping. Or serve the source preview:
 
 ```sh
 python3 -m http.server 4173 --directory preview
 ```
 
-Then open `http://localhost:4173`.
+Open `http://localhost:4173`. The primary spaces are **Dot → Speak → Social → .md → Me**. Expanded layout places the workspace on the left, content in the middle, and navigation on the right. Compact layout uses a five-item bottom bar. Narrow browser windows also use the compact shell.
 
 ## What to try
 
-- Switch between iPhone 18 and iPhone Duo layouts; a draft and conversation survive the switch.
-- Open GOD, Agents, Red, and Me.
-- Send a demo prompt; replies are deterministic examples, not model inference.
-- Review, edit, approve, or reject the sample learning proposal; inspect and revert an approval in Journey.
-- Inspect skill capabilities before installing a disabled example skill.
-- Edit SOUL.md, USER.md, MEMORY.md, and AGENTS.md in preview memory.
-- Inspect model routing, privacy, and computer pairing explanations.
+- **Dot:** type a draft and change spaces or widths; send an example prompt, choose a runtime route, archive a conversation with New conversation, and reopen it from history. The main conversation is the General Orchestrator Director. Runtime profiles cover pi-coding-agent, Claude Code, and Hermes Agent.
+- **Speak:** start and stop a sample recording, edit its transcript, apply deterministic filler cleanup, undo it, and insert the result in the example text field. Edit the shared `instruction.md` preview, import/export UTF-8 Markdown, and select the explicit text-rewrite route. Drafts survive navigation, saved instructions are limited to 8 KB, and route selections make no model calls. View native keyboard setup, cold/warm microphone-session guidance, secure-field/app restrictions, and the Harness subscription inclusion. The preview does not use the microphone or verify Apple Private Cloud capability or a subscription entitlement.
+- **Social:** compose a post or multi-part thread, post locally, reply, like, repost, view profiles, follow a sample person, and switch the chronological timeline between Everyone and Following. Drafts and actions persist locally. The minimal-censorship product direction is explained separately from feed order; no public moderation policy is claimed as implemented.
+- **.md:** search notes or tags, switch between editing and reading, follow wikilinks, inspect backlinks, create notes, and export portable Markdown. User text is escaped before rendering. Raw HTML and unsafe link schemes remain text. Markdown supports headings, lists, task items, blockquotes, emphasis, code, safe HTTP(S) links, and wikilinks.
+- **Me:** Connections & SSH comes first, then subscription, models, personal intelligence, and privacy. Add and edit non-secret SSH profile details; saved profiles always remain disconnected. Review or revert a sample learning preference.
 
-Everything resets on reload. No model API, telemetry, external assets, API-key collection, browser persistence, or computer connection is implemented. Sample social counts illustrate a future Red community. The native Red MVP is a local collection.
+The examples use browser local storage, including drafts, notes, posts, and connection profiles. Reloading preserves changes when storage is available. Reset preview asks before clearing data. Private browsing or local-file storage restrictions may limit persistence to the current tab; Privacy reports that state. Sample people and conversations are demonstrations. No model requests, public social service, analytics, SSH sessions, real microphone recording, native keyboard handoff, or purchases are implemented in this browser preview.
 
-This is an interface study alongside the native SwiftUI implementation, not a screenshot of a running iOS app. It uses illustrative dimensions and system chrome; it does not simulate actual device hardware, Apple Intelligence availability, native keyboard behavior, Dynamic Type, or Apple's platform navigation. Use Xcode and real devices for those checks.
+This is an interactive design preview alongside the native SwiftUI app. It does not prove physical-device dictation, App Store entitlements, native agent connections, or a deployed public social service. The approved two-horse painting is the product logo; its original image and Chinese lettering are preserved.
 
-## Edit and rebuild
+## Rebuild and verify
 
-Edit `index.html`, `style.css`, and `app.js`, then regenerate the portable HTML:
+Edit `index.html`, `style.css`, `model.js`, and `app.js`, then run:
 
 ```sh
 python3 scripts/build-preview.py
+node --check preview/app.js
+node --check preview/model.js
+node --test preview/model.test.cjs
 ```
 
-`harness-interface.png` shows both layouts. `harness-duo.png`, `harness-iphone.png`, and `harness-learning.png` show individual interface states.
+The state tests cover draft restoration, chronological filtering, threads/replies, invalid posts, wikilinks/backlinks/search, and Markdown injection resistance. `showcase.html` displays compact and expanded previews together.
+
+## Current captures
+
+Captured October 13, 2026 from the rebuilt portable preview, using a fresh browser origin and the Compact/Expanded controls. These show the actual rendered preview; they are not native-device screenshots. The five-space sheet combines unchanged screen crops from the same browser size.
+
+![Dot, Speak, Social, Markdown and Me](harness-interface.png)
+
+![Expanded workspace and right navigation](harness-duo.png)
+
+Individual compact captures: [Dot](harness-iphone.png), [Speak](harness-speak.png), [Social](harness-social.png), [Markdown](harness-markdown.png), [Me](harness-me.png).

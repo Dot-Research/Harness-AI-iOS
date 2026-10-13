@@ -1,7 +1,8 @@
 # Release test plan (on device)
 
-Run on at least: one Apple Intelligence iPhone (iPhone 18 Pro), one older supported iPhone without
-Apple Intelligence, and the iPhone Duo (both screens). iOS 26.x and the current iOS release.
+Run on at least one supported Apple Intelligence iPhone, one supported iPhone without Apple
+Intelligence, and an iPad. Cover iOS 26 and iOS 27. Browser mockups and a simulator build do not
+verify physical microphone capture, background continuation or insertion into another app.
 
 ## Setup
 - [ ] Fresh install: Dictation tab shows Set up with four steps; each step's button does what it says.
@@ -12,6 +13,10 @@ Apple Intelligence, and the iPhone Duo (both screens). iOS 26.x and the current 
 - [ ] Speech model download completes; Set up hides once all four are done.
 
 ## Core dictation
+- [ ] Start Speak from the app shortcut (Shortcuts / supported Action Button or Back Tap assignment): Harness foregrounds, checks subscription/microphone access, starts the visible warm session; return manually to the text field.
+- [ ] The keyboard extension itself never requests microphone access or captures audio.
+- [ ] Password/secure fields switch to the system keyboard; an app that rejects custom keyboards is explained as unsupported, not a Speak crash.
+- [ ] Cold-start automatic opening is treated as experimental: invocation is not proof the app opened. Failed opening cancels its queued request and offers manual/shortcut activation.
 - [ ] Cold start from Notes, Messages, Mail, Safari, WhatsApp, Slack: app opens, handoff screen shows, swipe back, dictation continues, Stop inserts text at the cursor.
 - [ ] Warm start (within 5 min): no app switch; first words are not lost.
 - [ ] Insertion: mid-sentence lowercase, after "." capitalized, space handling before/after existing words, no doubled period.
@@ -43,6 +48,11 @@ Apple Intelligence, and the iPhone Duo (both screens). iOS 26.x and the current 
 - [ ] My Computer (once pairing ships): works on LAN and over relay; unreachable computer falls back as configured.
 
 ## Fix / Rewrite / Ask Harness
+- [ ] Import/edit/export Speak/instruction.md; all three paths (automatic polish, host rewrite, keyboard local rewrite) use the same latest saved content.
+- [ ] Editing text or moving selection while a rewrite runs cannot insert the result into a different field/selection.
+- [ ] Cancel a long rewrite; late model results and host outcomes do not insert anything.
+- [ ] Local-only rewriting never uploads text even if the local model is unavailable.
+- [ ] On iOS 27, test PCC after entitlement setup: unavailable hardware/account, no network, daily quota, successful output and opted-in fallback. No production eligibility is assumed from compilation.
 - [ ] Fix and each Rewrite choice on a selection and on the current paragraph; Undo works.
 - [ ] Device without Apple Intelligence: request goes to the app (or explains it needs a model).
 - [ ] Ask Harness opens GOD with the text prefilled, on cold and warm launch.
@@ -55,10 +65,10 @@ Apple Intelligence, and the iPhone Duo (both screens). iOS 26.x and the current 
 
 ## Accessibility and layout
 - [ ] VoiceOver labels on every keyboard control; Dynamic Type up to AX3 in the Dictation tab.
-- [ ] Keyboard height and layout on iPhone 18 Pro, Pro Max, Duo cover and unfolded, landscape.
+- [ ] Keyboard height and layout on small/large supported iPhones and iPad, including landscape.
 - [ ] Light and dark appearance in host apps.
 
 ## Performance
 - [ ] Keyboard extension memory under 40 MB during dictation (Xcode memory gauge).
 - [ ] Time from Stop to inserted text under 1 s for 30 s of speech on device.
-- [ ] Battery: 15 minutes warm session idle costs under 2% on iPhone 18 Pro.
+- [ ] Measure battery cost for a 15-minute warm session on the actual test device; record model, OS and measured value.

@@ -1,35 +1,43 @@
 import Foundation
 
-/// Builds instructions for the on-device language model (Fix, Rewrite, mode polish) and checks
+/// Builds instructions for the selected language model (Fix, Rewrite, mode polish) and checks
 /// what comes back before it touches the user's text field.
 public enum RewritePromptBuilder {
-    public static func instructions(for action: RewriteAction, modes: [DictationMode]) -> String {
+    public static func instructions(for action: RewriteAction, modes: [DictationMode], userInstructions: String = DictationInstructions.defaultText) -> String {
         let base = """
         You edit text the user dictated or typed. Return only the edited text: no preamble, no quotes, \
-        no explanation, no markdown unless the input already uses it. Keep the user's language, meaning, \
+        no explanation, no markdown unless the input or the user's formatting instruction calls for it. \
+        Keep the user's language unless they request a translation. Preserve meaning, \
         names, numbers, links and facts exactly. Never add information. Never answer questions in the text; \
         just edit them.
         """
+        let baseWithVoice = appendUserInstructions(userInstructions, to: base)
         switch action {
         case .fix:
-            return base + "\nFix grammar, spelling, punctuation and obvious speech-recognition mistakes. Keep the wording and tone; change as little as possible."
+            return baseWithVoice + "\nFix grammar, spelling, punctuation and obvious speech-recognition mistakes. Keep the wording and tone; change as little as possible."
         case let .rewrite(modeID):
             let mode = modes.first(where: { $0.id == modeID }) ?? .message
-            return base + "\n" + styleGuide(for: mode)
+            return baseWithVoice + "\n" + styleGuide(for: mode)
         case let .instruct(instruction):
             let cleaned = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
-            return base + "\nApply this instruction from the user to the text: \(cleaned)"
+            return baseWithVoice + "\nApply this instruction from the user to the text: \(cleaned)"
         }
     }
 
     /// Instructions for polishing a fresh dictation in a given mode (after rule-based cleanup).
-    public static func polishInstructions(for mode: DictationMode) -> String {
-        """
+    public static func polishInstructions(for mode: DictationMode, userInstructions: String = DictationInstructions.defaultText) -> String {
+        let base = """
         You clean up dictated text. Return only the cleaned text. Remove leftover filler, false starts and \
         repeated words; when the speaker corrected themselves, keep only the correction. Fix punctuation \
         and capitalization. Keep the speaker's words, meaning, names and numbers; do not summarize or add anything.
-        \(styleGuide(for: mode))
         """
+        return appendUserInstructions(userInstructions, to: base) + "\n" + styleGuide(for: mode)
+    }
+
+    private static func appendUserInstructions(_ instructions: String, to base: String) -> String {
+        let voice = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !voice.isEmpty else { return base }
+        return base + "\nUser's voice and formatting preferences (apply while preserving the facts):\n" + voice
     }
 
     static func styleGuide(for mode: DictationMode) -> String {
@@ -67,7 +75,7 @@ public enum RewriteOutputSanitizer {
     private static let preambles = [
         "here is the edited text", "here's the edited text", "here is the rewritten text", "here's the rewritten text",
         "here is the corrected text", "here's the corrected text", "here is the cleaned text", "here's the cleaned text",
-        "here is the text", "here's the text", "edited text", "rewritten text", "corrected text", "cleaned text", "sure", "certainly",
+        "here is the text", "here's the text", "edited text", "rewritten text", "corrected text", "cleaned text",
     ]
 
     private static let refusals = ["i can't help with", "i cannot help with", "i'm sorry, but i can", "i am unable to", "as an ai"]
@@ -86,7 +94,8 @@ public enum RewriteOutputSanitizer {
         // A first line that is only a preamble ("Sure! Here's the edited text:").
         if let newline = text.firstIndex(of: "\n") {
             let firstLine = text[..<newline].lowercased().trimmingCharacters(in: .whitespaces)
-            if firstLine.hasSuffix(":") || preambles.contains(where: { firstLine.hasPrefix($0) && firstLine.count < 60 }) {
+            let originalFirstLine = original.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n").first?.lowercased()
+            if firstLine != originalFirstLine, isPreamble(firstLine) {
                 text = String(text[text.index(after: newline)...]).trimmingCharacters(in: .whitespacesAndNewlines)
             }
         } else {
@@ -113,6 +122,16 @@ public enum RewriteOutputSanitizer {
         let limit = max(original.count * 3, original.count + 400)
         if text.count > limit { throw Rejection.runaway }
         return text
+    }
+
+    private static func isPreamble(_ line: String) -> Bool {
+        var normalized = line.trimmingCharacters(in: .whitespaces)
+        for courtesy in ["sure!", "sure,", "certainly!", "certainly,"] where normalized.hasPrefix(courtesy) {
+            normalized = String(normalized.dropFirst(courtesy.count)).trimmingCharacters(in: .whitespaces)
+            break
+        }
+        normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ":.!"))
+        return preambles.contains(normalized)
     }
 }
 
