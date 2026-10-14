@@ -25,6 +25,9 @@ public final class DictationHost: ObservableObject {
         /// Evaluated at every session event. Harness injects verified subscription access;
         /// independent library clients retain their existing unrestricted behavior by default.
         public var checkAccess: @MainActor () -> DictationAccessDecision
+        /// True while access is still being determined (for example StoreKit is loading entitlements).
+        /// Keyboard starts and rewrites wait instead of failing; call `refreshAccess()` when it settles.
+        public var accessIsPending: @MainActor () -> Bool
 
         public init(
             group: AppGroupConfiguration = AppGroupConfiguration(),
@@ -32,7 +35,8 @@ public final class DictationHost: ObservableObject {
             computer: PairedComputerTranscription? = nil,
             rewriter: TextRewriter = OnDeviceRewriter(),
             fallbackRewriter: TextRewriter? = nil,
-            checkAccess: @escaping @MainActor () -> DictationAccessDecision = { .allowed }
+            checkAccess: @escaping @MainActor () -> DictationAccessDecision = { .allowed },
+            accessIsPending: @escaping @MainActor () -> Bool = { false }
         ) {
             self.group = group
             self.credentials = credentials
@@ -40,6 +44,7 @@ public final class DictationHost: ObservableObject {
             self.rewriter = rewriter
             self.fallbackRewriter = fallbackRewriter
             self.checkAccess = checkAccess
+            self.accessIsPending = accessIsPending
         }
     }
 
@@ -88,6 +93,11 @@ public final class DictationHost: ObservableObject {
     private var activeSuggestion: ModeSuggester.Suggestion?
     private var localRequestIDs = Set<UUID>()
     private var pendingForegroundStart: DictationRequest?
+    /// `activate()` arrived while access was still pending; it runs when access settles.
+    private var activationAwaitingAccess = false
+    private var accessWasPending = false
+    /// Keyboard starts already answered with an error but still in the queue behind other commands.
+    private var failedStartIDs = Set<UUID>()
     private var isAppActive = false
     private var publishScheduled = false
     private var lastHeartbeatWrite = Date.distantPast
@@ -167,6 +177,11 @@ public final class DictationHost: ObservableObject {
 
     /// Starts the microphone session. Call only while the app is in the foreground.
     public func activate() async {
+        if deps.accessIsPending() {
+            activationAwaitingAccess = true
+            return
+        }
+        activationAwaitingAccess = false
         guard refreshAccess().isAllowed else {
             return failPendingStarts(.subscriptionRequired, accessDecision.denialMessage ?? "A Harness subscription is required.")
         }
@@ -236,6 +251,23 @@ public final class DictationHost: ObservableObject {
         let decision = deps.checkAccess()
         let previousDenial = accessDecision.denialMessage
         accessDecision = decision
+        if deps.accessIsPending() {
+            // Nothing is decided yet: don't stop a session or fail anything on a provisional denial.
+            accessWasPending = true
+            return decision
+        }
+        let settled = accessWasPending
+        accessWasPending = false
+        if activationAwaitingAccess {
+            activationAwaitingAccess = false
+            Task {
+                await activate()
+                showsHandoff = machine.phase != .inactive
+            }
+        } else if settled {
+            // Starts and rewrites held during the check now succeed or fail with the real decision.
+            processCommands()
+        }
         if let message = decision.denialMessage {
             lastError = message
             status.notice = message
@@ -251,10 +283,15 @@ public final class DictationHost: ObservableObject {
 
     private func sessionEffects(_ event: SessionMachine.Event, now: Date) -> [SessionMachine.Effect] {
         let decision = deps.checkAccess()
+        let previousDenial = accessDecision.denialMessage
         accessDecision = decision
         if let message = decision.denialMessage {
             status.notice = message
             lastError = message
+        } else if let previousDenial {
+            // Access came back before refreshAccess ran; don't leave the old denial on screen.
+            if status.notice == previousDenial { status.notice = nil }
+            if lastError == previousDenial { lastError = nil }
         }
         return machine.handle(event, now: now, access: decision)
     }
@@ -301,13 +338,20 @@ public final class DictationHost: ObservableObject {
         let pending = queue.pending(after: status.lastProcessedSeq)
         guard !pending.isEmpty else { return }
         let now = Date()
+        let accessPending = deps.accessIsPending()
+        if accessPending { accessWasPending = true }
         for command in pending {
+            if accessPending {
+                // Leave this and everything after it queued until access settles, so order is kept.
+                if case .start = command.kind { break }
+                if case .rewrite = command.kind { break }
+            }
             status.lastProcessedSeq = command.seq
             // Commands from long ago (the app wasn't running) are no longer what the user wants.
             let age = now.timeIntervalSince(command.issuedAt)
             switch command.kind {
             case let .start(request):
-                guard age < 60 else { continue }
+                guard failedStartIDs.remove(request.id) == nil, age < 60 else { continue }
                 apply(sessionEffects(.start(request), now: now))
             case let .stop(id):
                 apply(sessionEffects(.stop(id), now: now))
@@ -514,17 +558,19 @@ public final class DictationHost: ObservableObject {
     private func failPendingStarts(_ code: BridgeError.Code, _ message: String) {
         lastError = message
         if let files {
+            // Fail only the starts; rewrites, handoffs and acknowledgements behind them still run.
             for command in files.readQueue().pending(after: status.lastProcessedSeq) {
-                if case let .start(request) = command.kind {
+                if case let .start(request) = command.kind, !failedStartIDs.contains(request.id) {
+                    failedStartIDs.insert(request.id)
                     deliver(DictationOutcome(requestID: request.id, text: nil, route: nil, duration: 0, completedAt: Date(), error: BridgeError(code, message)))
                 }
-                status.lastProcessedSeq = command.seq
             }
         }
         if let pending = pendingForegroundStart {
             pendingForegroundStart = nil
             deliver(DictationOutcome(requestID: pending.id, text: nil, route: nil, duration: 0, completedAt: Date(), error: BridgeError(code, message)))
         }
+        processCommands()
         publish()
     }
 
@@ -584,10 +630,18 @@ public final class DictationHost: ObservableObject {
         rewriteTask = nil
         activeRewriteID = job.id
         status.rewrite = nil
+        // The keyboard's Fix/Rewrite are part of the same paid feature as dictation.
+        if let denial = deps.checkAccess().denialMessage {
+            activeRewriteID = nil
+            status.rewrite = RewriteOutcome(jobID: job.id, text: nil, error: BridgeError(.subscriptionRequired, denial), completedAt: Date())
+            publish()
+            return
+        }
         let rewriter: TextRewriter?
         if deps.rewriter.isAvailable {
             rewriter = deps.rewriter
-        } else if let fallback = deps.fallbackRewriter, fallback.isAvailable {
+        } else if settings.effectiveAppleRewriteRoute.permitsNetwork, let fallback = deps.fallbackRewriter, fallback.isAvailable {
+            // Only when the user allowed text to leave the device; "On device" never falls back.
             rewriter = fallback
         } else {
             rewriter = nil

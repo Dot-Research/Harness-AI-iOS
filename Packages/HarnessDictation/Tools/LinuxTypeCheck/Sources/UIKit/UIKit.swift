@@ -102,6 +102,10 @@ public enum UIReturnKeyType: Int, Sendable {
     case `default`, go, google, join, next, route, search, send, yahoo, done, emergencyCall, `continue`
 }
 
+public enum UITextAutocapitalizationType: Int, Sendable {
+    case none, words, sentences, allCharacters
+}
+
 public struct UITextContentType: RawRepresentable, Hashable, Sendable {
     public var rawValue: String
     public init(rawValue: String) { self.rawValue = rawValue }
@@ -115,6 +119,7 @@ public struct UITextContentType: RawRepresentable, Hashable, Sendable {
     var selectedText: String? { get }
     var keyboardType: UIKeyboardType? { get }
     var returnKeyType: UIReturnKeyType? { get }
+    var autocapitalizationType: UITextAutocapitalizationType? { get }
     var textContentType: UITextContentType?? { get }
     func insertText(_ text: String)
     func deleteBackward()

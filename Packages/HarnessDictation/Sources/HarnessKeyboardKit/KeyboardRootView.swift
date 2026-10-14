@@ -3,7 +3,8 @@ import SwiftUI
 import DictationCore
 
 /// The Harness Keyboard: dictation first, with the control layer from the spec
-/// (Dictate | Fix | Rewrite | Ask Harness) and just enough keys to finish a message.
+/// (Dictate | Fix | Rewrite | Ask Harness). Below it, either the dictation panel with just enough
+/// keys to finish a message, or a full typing layer (letters, numbers, symbols).
 struct KeyboardRootView: View {
     @ObservedObject var model: KeyboardViewModel
     let showsGlobe: Bool
@@ -17,7 +18,9 @@ struct KeyboardRootView: View {
         VStack(spacing: 8) {
             controlBar
             Group {
-                if !model.hasFullAccess {
+                if showingKeys {
+                    typingPanel
+                } else if !model.hasFullAccess && model.phase == .idle {
                     fullAccessCard
                 } else {
                     switch model.phase {
@@ -31,7 +34,9 @@ struct KeyboardRootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            bottomRow
+            if !showingKeys {
+                bottomRow
+            }
         }
         .padding(.horizontal, 6)
         .padding(.top, 6)
@@ -41,6 +46,9 @@ struct KeyboardRootView: View {
         .tint(palette.accent)
     }
 
+    /// Typing keys replace the dictation panel only at rest; dictation and rewrite progress always show.
+    private var showingKeys: Bool { model.showsKeys && model.phase == .idle }
+
     // MARK: Control layer
 
     private var controlBar: some View {
@@ -49,12 +57,12 @@ struct KeyboardRootView: View {
                           systemImage: model.phase == .listening ? "stop.fill" : "mic.fill",
                           prominent: true, active: model.phase == .listening, palette: palette) { model.micTapped() }
             ControlButton(title: "Fix", systemImage: "checkmark.circle", palette: palette) { model.fixTapped() }
-                .disabled(!model.rewriteAvailable || model.phase == .listening)
+                .disabled(!model.rewriteAvailable || !model.canUseTextActions)
             ControlButton(title: "Rewrite", systemImage: "wand.and.stars", active: model.phase == .rewriteMenu, palette: palette) { model.rewriteTapped() }
-                .disabled(!model.rewriteAvailable || model.phase == .listening)
+                .disabled(!model.rewriteAvailable || !model.canUseTextActions)
             ControlButton(title: "Ask", systemImage: "circle.circle", palette: palette) { model.askHarnessTapped() }
                 .accessibilityLabel("Ask Harness")
-                .disabled(model.phase == .listening)
+                .disabled(!model.canUseTextActions)
         }
         .frame(height: 40)
     }
@@ -200,12 +208,16 @@ struct KeyboardRootView: View {
             if showsGlobe {
                 globe().frame(width: 44, height: 42)
             }
+            Button { model.toggleKeys() } label: { Image(systemName: "keyboard") }
+                .buttonStyle(KeyStyle(palette: palette, height: 42, secondary: true))
+                .frame(width: 44)
+                .accessibilityLabel("Show keyboard")
             ForEach([",", ".", "?", "!"], id: \.self) { mark in
                 Button(mark) { model.insert(mark) }
                     .buttonStyle(KeyStyle(palette: palette, height: 42))
                     .frame(width: 34)
             }
-            Button("space") { model.insert(" ") }
+            Button("space") { model.spaceTapped() }
                 .buttonStyle(KeyStyle(palette: palette, height: 42))
             RepeatingKey(action: { model.deleteBackward() }) {
                 Image(systemName: "delete.left")
@@ -213,10 +225,103 @@ struct KeyboardRootView: View {
             .buttonStyle(KeyStyle(palette: palette, height: 42, secondary: true))
             .frame(width: 48)
             .accessibilityLabel("Delete")
-            Button { model.insert("\n") } label: { Image(systemName: "return") }
+            returnKey
+        }
+    }
+
+    private var returnKey: some View {
+        Button { model.returnTapped() } label: {
+            if let title = model.returnKeyTitle {
+                Text(verbatim: title).font(.system(size: 15, weight: .medium)).lineLimit(1).minimumScaleFactor(0.7)
+            } else {
+                Image(systemName: "return")
+            }
+        }
+        .buttonStyle(KeyStyle(palette: palette, height: 42, secondary: true))
+        .frame(width: model.returnKeyTitle == nil ? 48 : 74)
+        .accessibilityLabel(model.returnKeyTitle ?? "Return")
+    }
+
+    // MARK: Typing layer
+
+    private var typingPanel: some View {
+        let rows = TypingKeyboard.rows(for: model.plane)
+        return VStack(spacing: 8) {
+            ForEach(rows.indices, id: \.self) { index in
+                HStack(spacing: 5) {
+                    ForEach(rows[index], id: \.self) { key in
+                        typingKey(key)
+                    }
+                }
+                // The 9-key middle letter row sits inset, as on the system keyboard.
+                .padding(.horizontal, model.plane == .letters && index == 1 ? 17 : 0)
+            }
+            typingBottomRow
+        }
+    }
+
+    @ViewBuilder
+    private func typingKey(_ key: TypingKey) -> some View {
+        switch key {
+        case .character(let character):
+            Button { model.keyTapped(key) } label: {
+                Text(verbatim: model.plane == .letters ? model.shift.apply(to: character) : character)
+            }
+            .buttonStyle(KeyStyle(palette: palette, height: 42))
+        case .shift:
+            Button { model.keyTapped(key) } label: { Image(systemName: shiftSymbol) }
+                .buttonStyle(KeyStyle(palette: palette, height: 42, secondary: !model.shift.isActive))
+                .frame(width: 44)
+                .accessibilityLabel(model.shift.state == .locked ? "Caps lock" : "Shift")
+                .accessibilityValue(model.shift.isActive ? "On" : "Off")
+        case .delete:
+            RepeatingKey(action: { model.keyTapped(key) }) {
+                Image(systemName: "delete.left")
+            }
+            .buttonStyle(KeyStyle(palette: palette, height: 42, secondary: true))
+            .frame(width: 44)
+            .accessibilityLabel("Delete")
+        case .plane(let plane):
+            Button { model.keyTapped(key) } label: {
+                Text(verbatim: plane == .symbols ? "#+=" : "123").font(.system(size: 15))
+            }
+            .buttonStyle(KeyStyle(palette: palette, height: 42, secondary: true))
+            .frame(width: 44)
+            .accessibilityLabel(plane == .symbols ? "More symbols" : "Numbers")
+        }
+    }
+
+    private var shiftSymbol: String {
+        switch model.shift.state {
+        case .off: return "shift"
+        case .once: return "shift.fill"
+        case .locked: return "capslock.fill"
+        }
+    }
+
+    private var typingBottomRow: some View {
+        HStack(spacing: 5) {
+            Button { model.keyTapped(.plane(model.plane == .letters ? .numbers : .letters)) } label: {
+                Text(verbatim: model.plane == .letters ? "123" : "ABC").font(.system(size: 15))
+            }
+            .buttonStyle(KeyStyle(palette: palette, height: 42, secondary: true))
+            .frame(width: 44)
+            .accessibilityLabel(model.plane == .letters ? "Numbers" : "Letters")
+            if showsGlobe {
+                globe().frame(width: 40, height: 42)
+            }
+            Button { model.toggleKeys() } label: { Image(systemName: "waveform") }
                 .buttonStyle(KeyStyle(palette: palette, height: 42, secondary: true))
-                .frame(width: 48)
-                .accessibilityLabel("Return")
+                .frame(width: 40)
+                .accessibilityLabel("Show dictation panel")
+            ForEach(model.spaceBarNeighbors, id: \.self) { key in
+                Button { model.insert(key) } label: { Text(verbatim: key) }
+                    .buttonStyle(KeyStyle(palette: palette, height: 42))
+                    .frame(width: 34)
+            }
+            Button("space") { model.spaceTapped() }
+                .buttonStyle(KeyStyle(palette: palette, height: 42))
+            returnKey
         }
     }
 

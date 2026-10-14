@@ -35,6 +35,18 @@ final class TextProxyEditor {
         )
     }
 
+    /// The text before the cursor that the host lets the keyboard see.
+    var textBeforeInput: String? { proxy()?.documentContextBeforeInput }
+
+    var autocapitalization: KeyboardAutocapitalization {
+        switch proxy()?.autocapitalizationType ?? .sentences {
+        case .none: return .none
+        case .words: return .words
+        case .allCharacters: return .allCharacters
+        default: return .sentences
+        }
+    }
+
     /// Inserts dictated text, fitted to what's around the cursor.
     func insertDictation(_ text: String, languageCode: String?) {
         guard let p = proxy() else { return }

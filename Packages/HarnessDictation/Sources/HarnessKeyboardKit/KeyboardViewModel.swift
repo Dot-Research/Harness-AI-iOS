@@ -29,6 +29,13 @@ public final class KeyboardViewModel: ObservableObject {
     @Published public private(set) var modes: [DictationMode]
     @Published public private(set) var rewriteAvailable = false
 
+    /// Typing layer: letters, numbers and symbols below the control bar, instead of the dictation panel.
+    @Published public private(set) var showsKeys = false
+    @Published public private(set) var plane: KeyboardPlane = .letters
+    @Published public private(set) var shift = ShiftController()
+    @Published public private(set) var returnKeyTitle: String?
+    @Published public private(set) var spaceBarNeighbors: [String] = []
+
     weak var controller: UIInputViewController?
     private let group: AppGroupConfiguration
     private var client: KeyboardBridgeClient?
@@ -45,6 +52,9 @@ public final class KeyboardViewModel: ObservableObject {
     private var rewriteTask: Task<Void, Never>?
     private var activeRewriteID: UUID?
     private var waitingSince: Date?
+    /// When a rewrite was handed to the app; used to give up if the app never answers.
+    private var rewriteSentAt: Date?
+    private var lastSpaceAt: Date?
     private var messageTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
@@ -58,12 +68,17 @@ public final class KeyboardViewModel: ObservableObject {
     // MARK: Lifecycle
 
     private static let lastHandledKey = "harness.keyboard.lastHandledRequest"
+    /// Per keyboard process; the App Group is closed without Full Access, and typing must not need it.
+    private static let showsKeysKey = "harness.keyboard.showsKeys"
 
     func appear(hasFullAccess: Bool) {
         self.hasFullAccess = hasFullAccess
         if let raw = group.defaults?.string(forKey: Self.lastHandledKey), let id = UUID(uuidString: raw) {
             dismissedRequestIDs.insert(id)
         }
+        showsKeys = UserDefaults.standard.object(forKey: Self.showsKeysKey) as? Bool ?? !hasFullAccess
+        plane = .letters
+        refreshTypingContext()
         rewriteAvailable = localRewriter.isAvailable || hasFullAccess
         KeyboardPresence(lastSeen: Date(), hasFullAccess: hasFullAccess).write(to: group)
         guard hasFullAccess else { return }
@@ -101,6 +116,7 @@ public final class KeyboardViewModel: ObservableObject {
             show("The text or selection changed. Select it again to rewrite.")
         }
         refreshUndo()
+        refreshTypingContext()
     }
 
     private func apply(_ settings: DictationSettings) {
@@ -204,6 +220,11 @@ public final class KeyboardViewModel: ObservableObject {
         }
         if let rewrite = status.rewrite, rewrite.jobID == pendingRewrite?.job.id {
             finishRewrite(rewrite)
+        } else if let sent = rewriteSentAt, phase == .rewriting,
+                  (!status.isAlive(at: now) && now.timeIntervalSince(sent) > 25) || now.timeIntervalSince(sent) > 90 {
+            // The app never picked the rewrite up, or never answered.
+            cancelRewrite()
+            show("Harness didn't finish the rewrite. Try again.")
         }
 
         guard let id = pendingRequestID else { return }
@@ -248,6 +269,7 @@ public final class KeyboardViewModel: ObservableObject {
             let languageCode = settingsStore?.settings.languageCode
             editor.insertDictation(text, languageCode: languageCode)
             refreshUndo()
+            refreshTypingContext()
             haptic()
         } else if let error = outcome.error, error.code != .cancelled {
             show(error.message)
@@ -256,15 +278,24 @@ public final class KeyboardViewModel: ObservableObject {
 
     // MARK: Fix / Rewrite / Ask Harness
 
+    /// Fix, Rewrite and Ask only start from rest. While dictation is listening or finishing, a
+    /// rewrite would take over the phase and be stranded when the dictation result arrives.
+    public var canUseTextActions: Bool {
+        phase == .idle || phase == .rewriteMenu
+    }
+
     public func fixTapped() {
+        guard canUseTextActions else { return }
         rewrite(.fix)
     }
 
     public func rewriteTapped() {
+        guard canUseTextActions else { return }
         phase = phase == .rewriteMenu ? .idle : .rewriteMenu
     }
 
     public func rewriteChosen(_ action: RewriteAction) {
+        guard canUseTextActions else { return }
         phase = .idle
         rewrite(action)
     }
@@ -337,8 +368,13 @@ public final class KeyboardViewModel: ObservableObject {
             rewriteTask = nil
             client.send(.rewrite(job))
             client.setPolling(true)
-            if !client.status.isAlive(at: Date()), let controller {
-                HostAppOpener.open(HarnessLink.url(for: .dictationTab(section: "rewrite")), from: controller)
+            rewriteSentAt = Date()
+            if !client.status.isAlive(at: Date()) {
+                guard let controller, HostAppOpener.open(HarnessLink.url(for: .dictationTab(section: "rewrite")), from: controller) else {
+                    cancelRewrite()
+                    show("Open the Harness app once, then try Rewrite again.")
+                    return
+                }
             }
         }
     }
@@ -350,6 +386,7 @@ public final class KeyboardViewModel: ObservableObject {
         pendingRewrite = nil
         activeRewriteID = nil
         rewriteTask = nil
+        rewriteSentAt = nil
         if let text = outcome.text {
             applyRewrite(text, to: pending.target)
         } else {
@@ -365,6 +402,7 @@ public final class KeyboardViewModel: ObservableObject {
             return
         }
         refreshUndo()
+        refreshTypingContext()
         haptic()
     }
 
@@ -374,6 +412,7 @@ public final class KeyboardViewModel: ObservableObject {
         rewriteTask?.cancel()
         rewriteTask = nil
         pendingRewrite = nil
+        rewriteSentAt = nil
         if phase == .rewriting {
             phase = .idle
             client?.setPolling(false)
@@ -381,6 +420,7 @@ public final class KeyboardViewModel: ObservableObject {
     }
 
     public func askHarnessTapped() {
+        guard canUseTextActions else { return }
         guard hasFullAccess, let client else {
             show("Turn on Full Access to send text to Harness.")
             return
@@ -398,16 +438,85 @@ public final class KeyboardViewModel: ObservableObject {
     public func undoTapped() {
         editor.undo()
         refreshUndo()
+        refreshTypingContext()
     }
 
     public func insert(_ text: String) {
         editor.insert(text)
+        lastSpaceAt = nil
         refreshUndo()
+        refreshTypingContext()
     }
 
     public func deleteBackward() {
         editor.deleteBackward()
+        lastSpaceAt = nil
         refreshUndo()
+        refreshTypingContext()
+    }
+
+    // MARK: Typing layer
+
+    public func toggleKeys() {
+        showsKeys.toggle()
+        UserDefaults.standard.set(showsKeys, forKey: Self.showsKeysKey)
+        if phase == .rewriteMenu { phase = .idle }
+        plane = .letters
+        refreshTypingContext()
+    }
+
+    public func keyTapped(_ key: TypingKey) {
+        switch key {
+        case .character(let character):
+            let typed = plane == .letters ? shift.apply(to: character) : character
+            editor.insert(typed)
+            lastSpaceAt = nil
+            shift.characterTyped()
+            if TypingKeyboard.returnsToLetters(after: character, on: plane) { plane = .letters }
+            refreshUndo()
+            refreshTypingContext()
+        case .shift:
+            shift.tap(at: Date())
+        case .delete:
+            deleteBackward()
+        case .plane(let next):
+            plane = next
+        }
+    }
+
+    public func spaceTapped() {
+        let now = Date()
+        let keyboardType = editor.fieldTraits.keyboardType
+        if let last = lastSpaceAt, now.timeIntervalSince(last) < 0.6,
+           TypingKeyboard.shouldInsertPeriodForDoubleSpace(before: editor.textBeforeInput, keyboardType: keyboardType) {
+            editor.deleteBackward()
+            editor.insert(". ")
+            lastSpaceAt = nil
+        } else {
+            editor.insert(" ")
+            lastSpaceAt = now
+        }
+        if TypingKeyboard.returnsToLetters(after: " ", on: plane) { plane = .letters }
+        refreshUndo()
+        refreshTypingContext()
+    }
+
+    public func returnTapped() {
+        editor.insert("\n")
+        lastSpaceAt = nil
+        refreshUndo()
+        refreshTypingContext()
+    }
+
+    /// Re-reads the field: automatic capitals, return key title and field-specific keys.
+    private func refreshTypingContext() {
+        let traits = editor.fieldTraits
+        returnKeyTitle = TypingKeyboard.returnKeyTitle(for: traits.returnKeyType)
+        spaceBarNeighbors = TypingKeyboard.spaceBarNeighbors(keyboardType: traits.keyboardType)
+        let capitalize = TypingKeyboard.shouldCapitalize(before: editor.textBeforeInput, mode: editor.autocapitalization, keyboardType: traits.keyboardType)
+        var updated = shift
+        updated.autoCapitalize(capitalize)
+        if updated != shift { shift = updated }
     }
 
     public func openSettings() {

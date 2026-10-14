@@ -21,7 +21,11 @@ struct HarnessApp: App {
             computer: nil,
             rewriter: ConfiguredAppleRewriter(group: AppGroupConfiguration(identifier: "group.org.harness.ios")),
             fallbackRewriter: nil,
-            checkAccess: { subscription.accessDecision }
+            checkAccess: { subscription.accessDecision },
+            accessIsPending: {
+                if case .checking = subscription.state { return true }
+                return false
+            }
         )))
     }
 

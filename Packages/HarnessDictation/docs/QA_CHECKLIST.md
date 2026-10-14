@@ -32,6 +32,18 @@ verify physical microphone capture, background continuation or insertion into an
 - [ ] Force-quit Harness while listening: keyboard shows "Dictation stopped" within a few seconds.
 - [ ] iOS relaunches the keyboard while the user is in Harness: returning still inserts the result once.
 
+## Typing layer
+- [ ] Without Full Access the keyboard opens on the typing keys; letters, numbers, symbols, space, delete and return all work.
+- [ ] Shift: one tap capitalizes one letter; a quick double tap locks caps (caps-lock icon); a third tap releases.
+- [ ] New field, after ". " and after a new line: shift is on automatically; it stays off after "word " and in email/URL fields.
+- [ ] Fields with words or all-characters capitalization (name fields, codes) follow the field.
+- [ ] Double-tap space after a word inserts ". "; not after punctuation, not in email/URL fields.
+- [ ] 123 / #+= / ABC switch planes; space or apostrophe on numbers returns to letters.
+- [ ] Email fields show @ and . next to space; URL fields show / and .; the return key reads send/go/search/done as the field asks.
+- [ ] Waveform key shows the dictation panel and the keyboard key returns to typing; the choice is remembered.
+- [ ] Dictate from the typing layer: the listening panel replaces the keys and typing comes back after insertion.
+- [ ] Fix, Rewrite and Ask are disabled while dictation is listening or finishing.
+
 ## Cleanup
 - [ ] "um let's meet Tuesday, no wait, Thursday" -> "Let's meet Thursday".
 - [ ] "first milk second eggs third bread" in Note mode -> numbered list.
@@ -56,6 +68,9 @@ verify physical microphone capture, background continuation or insertion into an
 - [ ] Fix and each Rewrite choice on a selection and on the current paragraph; Undo works.
 - [ ] Device without Apple Intelligence: request goes to the app (or explains it needs a model).
 - [ ] Ask Harness opens GOD with the text prefilled, on cold and warm launch.
+- [ ] Cold launch from the keyboard while the subscription is still loading: dictation starts once access is confirmed (no "Checking your subscription" failure); a queued Ask Harness or Rewrite is not lost.
+- [ ] Expired subscription: keyboard Fix/Rewrite through the app reports that a subscription is required.
+- [ ] Rewrite handed to the app with Harness unable to open: the keyboard gives up after about 25 s with a message instead of spinning.
 
 ## Privacy checks
 - [ ] Instruments / File Activity: no audio files created in any container during dictation.
