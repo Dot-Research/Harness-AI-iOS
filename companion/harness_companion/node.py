@@ -377,6 +377,15 @@ class Node:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # macOS refuses to signal a process group whose members have all exited but are not
+                # reaped yet (Linux reports no such process). Nothing is left to stop then; if the
+                # process somehow is still running, stop it directly.
+                if process.poll() is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
         elif process.poll() is None:
             try:
                 subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
