@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var appleModelAvailable = AppleModelProvider.isAvailable
     @Published private(set) var appleModelAvailabilityDescription = AppleModelProvider.availabilityDescription
     @Published var selectedTab: HarnessTab = .god
+    @Published var directorNavigationID = UUID()
     /// Text handed to GOD from elsewhere (Ask Harness in the keyboard); the composer takes it once.
     @Published var composerPrefill: String?
     private var store: SQLiteHarnessStore?
@@ -60,6 +61,15 @@ final class AppModel: ObservableObject {
             if loaded.files.isEmpty && loaded.agents.isEmpty && loaded.providers.isEmpty {
                 let seed = HarnessSeed.makeState()
                 try await storage.update { $0 = seed }
+            }
+            if loaded.directorName == "GOD" {
+                try await storage.update { state in
+                    state.directorName = "General Orchestrator Director"
+                    if let index = state.agents.firstIndex(where: { $0.id == "god" && $0.name == "GOD" }) {
+                        state.agents[index].name = state.directorName
+                        state.agents[index].purpose = "General Orchestrator Director: your main conversation in Dot."
+                    }
+                }
             }
             try await refresh()
             sessionID = state.sessions.sorted { $0.updatedAt > $1.updatedAt }.first?.id
@@ -166,11 +176,15 @@ final class AppModel: ObservableObject {
         continuation?.resume(returning: answer)
     }
     func clearError() { error = nil }
-    /// Opens GOD with `text` in the composer for the user to review and send. Nothing is sent automatically.
-    func prefillComposer(_ text: String) {
+    /// Opens the director conversation for a reviewed handoff. No message is sent automatically.
+    @discardableResult func prefillComposer(_ text: String) -> Bool {
+        guard !isWorking else { error = "Finish the current task before opening a new director request."; return false }
         let trimmed = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(16_000))
+        sessionID = state.sessions.filter { $0.agentID == "god" }.max { $0.updatedAt < $1.updatedAt }?.id
         selectedTab = .god
+        directorNavigationID = UUID()
         composerPrefill = trimmed.isEmpty ? nil : trimmed
+        return true
     }
     func reactivate() async {
         guard store != nil, !isWorking else { return }
@@ -260,8 +274,29 @@ final class AppModel: ObservableObject {
     }
     func unpair(_ id: String) async {
         guard !isWorking else { return }
-        do { try companion.removeCredentials(for: id); await change { $0.devices.removeAll { $0.id == id } } }
+        do { try companion.removeCredentials(for: id); await change { $0.devices.removeAll { $0.id == id }; $0.remoteAgents?.removeAll { $0.deviceID == id } } }
         catch { self.error = error.localizedDescription }
+    }
+    func saveRemoteAgent(_ connection: RemoteAgentConnection) async -> Bool {
+        guard !isWorking else { error = "Finish the current turn before changing an agent route."; return false }
+        guard let device = state.devices.first(where: { $0.id == connection.deviceID }) else { error = "Pair the computer first."; return false }
+        do {
+            // Validate configuration independently of the separate execution grant.
+            var validationDevice = device; validationDevice.capabilities.insert(.computerExecute)
+            _ = try RemoteAgentExecutionPlan(connection: connection, device: validationDevice, task: "Validate configuration")
+            error = nil
+            await change { state in
+                var routes = state.remoteAgentConnections
+                routes.removeAll { $0.id == connection.id }; routes.append(connection)
+                state.remoteAgents = routes
+                state.activity.append(ActivityEntry(title: "Remote agent route saved", detail: "\(connection.name): \(connection.runtime.rawValue), \(connection.routeDescription)", destination: device.name))
+            }
+            return error == nil
+        } catch { self.error = error.localizedDescription; return false }
+    }
+    func removeRemoteAgent(_ id: String) async {
+        guard !isWorking else { return }
+        await change { $0.remoteAgents?.removeAll { $0.id == id } }
     }
     func updateDeviceCapabilities(_ id: String, capabilities: Set<Capability>) async {
         await change { state in

@@ -7,7 +7,7 @@ enum VaultFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// The Vault tab: a Markdown notes manager over plain files, with links, backlinks, tags, daily notes
+/// The .md space: a Markdown notes manager over plain files, with links, backlinks, tags, daily notes
 /// and per-folder agent access. Two panes at wide widths (iPhone Duo unfolded), a stack otherwise.
 struct VaultView: View {
     @ObservedObject var vault: VaultModel
@@ -32,7 +32,7 @@ struct VaultView: View {
         GeometryReader { geometry in
             let wide = geometry.size.width >= 700 && !dynamicTypeSize.isAccessibilitySize
             HStack(spacing: 0) {
-                browser.frame(width: wide ? min(360, geometry.size.width * 0.4) : nil)
+                browser.frame(width: wide ? min(300, max(248, geometry.size.width * 0.32)) : nil)
                 if wide {
                     Rectangle().fill(HarnessTheme.border).frame(width: 1)
                     detail.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -40,9 +40,9 @@ struct VaultView: View {
             }
             .onChange(of: wide, initial: true) { _, value in isWide = value }
         }
-        .navigationTitle("Vault")
+        .navigationTitle(".md")
         .navigationDestination(item: $pushed) { NoteEditorView(vault: vault, path: $0) }
-        .searchable(text: $query, prompt: "Search the vault")
+        .searchable(text: $query, prompt: "Search your notes")
         .toolbar { toolbar }
         .task { await vault.refresh() }
         .refreshable { await vault.refresh() }
@@ -72,9 +72,9 @@ struct VaultView: View {
                     if selected == path { selected = nil }
                 }
             }
-        } message: { Text("It goes to the vault's .trash folder, which you can open in Files.") }
+        } message: { Text("It goes to your notes folder's .trash folder, which you can open in Files.") }
         .sheet(item: $tag) { TagNotesView(vault: vault, tag: $0.name) { opened in tag = nil; open(opened) } }
-        .alert("Vault", isPresented: Binding(get: { vault.error != nil }, set: { if !$0 { vault.error = nil } })) {
+        .alert(".md", isPresented: Binding(get: { vault.error != nil }, set: { if !$0 { vault.error = nil } })) {
             Button("OK") { vault.error = nil }
         } message: { Text(vault.error ?? "") }
         .harnessScreen()
@@ -85,8 +85,11 @@ struct VaultView: View {
     private var browser: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text(vault.summary)
-                    .font(.system(.caption, design: .monospaced)).foregroundStyle(HarnessTheme.secondary)
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Your notes.").font(.system(.title2, design: .serif))
+                    Text(vault.summary)
+                        .font(.caption).foregroundStyle(HarnessTheme.secondary)
+                }
                 if !query.trimmingCharacters(in: .whitespaces).isEmpty {
                     searchResults
                 } else {
@@ -94,9 +97,9 @@ struct VaultView: View {
                     switch filter {
                     case .all:
                         if vault.loaded && vault.noteCount == 0 { emptyState }
-                        agentFiles(compact: true)
-                        foldersSection
                         recentSection(limit: 6)
+                        foldersSection
+                        agentFiles(compact: true)
                     case .recent: recentSection(limit: nil)
                     case .daily: dailySection
                     case .tags: tagsSection
@@ -113,7 +116,7 @@ struct VaultView: View {
             NoteEditorView(vault: vault, path: selected, openNote: { self.selected = $0 }, onDeleted: { self.selected = nil })
                 .id(selected)
         } else {
-            HarnessEmptyState(symbol: "doc.text", title: "Pick a note.", detail: "Or start one with the pencil. Notes are plain Markdown files you can also open in Files.")
+            HarnessEmptyState(symbol: "doc.text", title: "Room for a thought.", detail: "Open a note or start one with the pencil. Your words stay in portable Markdown files, with links and backlinks to connect them.")
                 .padding(40).frame(maxWidth: 520)
         }
     }
@@ -124,7 +127,7 @@ struct VaultView: View {
                 ForEach(VaultFilter.allCases) { item in
                     Button { filter = item } label: {
                         Text(item.rawValue).font(.subheadline.weight(filter == item ? .semibold : .regular))
-                            .padding(.horizontal, 14).frame(minHeight: 36)
+                            .padding(.horizontal, 14).frame(minHeight: 44)
                             .foregroundStyle(filter == item ? HarnessTheme.background : HarnessTheme.text)
                             .background(filter == item ? HarnessTheme.text : HarnessTheme.surface, in: Capsule())
                     }
@@ -138,7 +141,7 @@ struct VaultView: View {
     // MARK: Sections
 
     private var emptyState: some View {
-        HarnessEmptyState(symbol: "books.vertical", title: "Your notes, as plain files.",
+        HarnessEmptyState(symbol: "doc.text", title: "Your words, your files.",
                           detail: "Write with [[links]] and #tags. Everything stays in Markdown files on this iPhone, and agents read only the folders you allow.")
     }
 
@@ -159,7 +162,7 @@ struct VaultView: View {
                         }.buttonStyle(.plain)
                     }
                     if !compact {
-                        Text("GOD reads these every turn. Changes it proposes wait for you in Learning.")
+                        Text("Dot reads these every turn. Changes it proposes wait for you in Learning.")
                             .font(.caption).foregroundStyle(HarnessTheme.secondary).padding(.top, 8)
                     }
                 }
@@ -309,14 +312,14 @@ struct VaultView: View {
                 Button { actions.newFolder(nil) } label: { Label("New folder", systemImage: "folder.badge.plus") }
                 Divider()
                 Section("Agents") { accessMenu(VaultAccessPolicy.rootKey) }
-                Section("Vault location: \(vault.locationName)") {
+                Section("Notes folder: \(vault.locationName)") {
                     Button { choosingFolder = true } label: { Label("Use a folder from Files…", systemImage: "folder.badge.gearshape") }
                     if vault.usesCustomFolder {
                         Button { Task { await vault.useDefaultFolder() } } label: { Label("Use On My iPhone › Harness", systemImage: "iphone") }
                     }
                 }
             } label: { Image(systemName: "ellipsis.circle") }
-                .accessibilityLabel("Vault options")
+                .accessibilityLabel("Note options")
         }
     }
 }
@@ -332,7 +335,7 @@ struct VaultActions {
 }
 
 @ViewBuilder func noteMenu(_ path: VaultPath, actions: VaultActions) -> some View {
-    Button { actions.askGOD(path) } label: { Label("Ask GOD about this note", systemImage: "sparkle") }
+    Button { actions.askGOD(path) } label: { Label("Ask Dot about this note", systemImage: "sparkle") }
     Button { actions.rename(path) } label: { Label("Rename", systemImage: "pencil") }
     Divider()
     Button(role: .destructive) { actions.delete(path) } label: { Label("Move to Trash", systemImage: "trash") }
@@ -413,8 +416,8 @@ struct VaultNoteRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(summary.note.title).font(.subheadline.weight(.medium)).foregroundStyle(isSelected ? HarnessTheme.coral : HarnessTheme.text)
-                .lineLimit(1)
+            Text(summary.note.title).font(.system(.body, design: .serif).weight(.medium)).foregroundStyle(isSelected ? HarnessTheme.coral : HarnessTheme.text)
+                .lineLimit(2)
             HStack(spacing: 6) {
                 if showFolder, let folder = summary.path.parent { Text(folder.rawValue) }
                 Text(summary.modified, format: .relative(presentation: .named))
@@ -424,7 +427,7 @@ struct VaultNoteRow: View {
             .font(.caption).foregroundStyle(HarnessTheme.secondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .padding(.vertical, 4).padding(.horizontal, isSelected ? 10 : 0)
+        .padding(.vertical, 8).padding(.horizontal, isSelected ? 10 : 0)
         .background(isSelected ? HarnessTheme.coral.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 10))
         .contentShape(Rectangle())
     }

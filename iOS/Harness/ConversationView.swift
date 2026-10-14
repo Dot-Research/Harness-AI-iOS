@@ -19,12 +19,12 @@ struct ConversationView: View {
     var body: some View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
+                if geometry.size.width >= 720 && !dynamicTypeSize.isAccessibilitySize {
+                    workspacePanel.frame(width: 260)
+                    Rectangle().fill(HarnessTheme.border).frame(width: 1)
+                }
                 conversation
                     .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-                if geometry.size.width >= 720 && !dynamicTypeSize.isAccessibilitySize {
-                    Rectangle().fill(HarnessTheme.border).frame(width: 1)
-                    workspacePanel.frame(width: 260)
-                }
             }
         }
         .navigationTitle(agentName)
@@ -104,15 +104,15 @@ struct ConversationView: View {
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 28) {
             HStack {
-                StatusPill(title: "YOUR PERSONAL AGENT", symbol: "sparkle", color: HarnessTheme.amber)
+                StatusPill(title: "DOT · YOUR DIRECTOR", symbol: "sparkle", color: HarnessTheme.coral)
                 Spacer()
             }
             HarnessMark(size: 78).padding(.top, 15)
             VStack(alignment: .leading, spacing: 14) {
-                Text("A little more\npossible.")
+                Text("One conversation.\nA wider reach.")
                     .font(.system(size: heroSize, weight: .regular, design: .serif))
                     .tracking(-1.6).fixedSize(horizontal: false, vertical: true)
-                Text("Think clearly. Get things done.\nBuild an agent that learns with you.")
+                Text("General Orchestrator Director\nThink with Dot. Delegate to your agents and machines.")
                     .font(.body).foregroundStyle(HarnessTheme.secondary).lineSpacing(5)
             }
             HarnessCard {
@@ -254,9 +254,16 @@ struct ConversationView: View {
                                   detail: "\(model.state.skills.filter(\.enabled).count) enabled methods")
                 }.buttonStyle(.plain)
                 NavigationLink { DevicesView() } label: {
-                    workspaceLink(symbol: "desktopcomputer", title: "Your devices",
-                                  detail: model.state.devices.isEmpty ? "Pair a computer with QR" : "\(model.state.devices.count) paired computers")
+                    workspaceLink(symbol: "desktopcomputer", title: "Connections & SSH",
+                                  detail: model.state.devices.isEmpty ? "Pair your first computer" : "\(model.state.devices.count) computers · \(model.state.remoteAgentConnections.count) agent routes")
                 }.buttonStyle(.plain)
+                ForEach(model.state.remoteAgentConnections) { connection in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Label(connection.name, systemImage: connection.sshAlias == nil ? "terminal" : "network")
+                            .font(.subheadline.weight(.medium)).foregroundStyle(HarnessTheme.coral)
+                        Text("\(connection.runtime.rawValue) · \(connection.routeDescription)").font(.caption).foregroundStyle(HarnessTheme.secondary)
+                    }
+                }
                 NavigationLink { PrivacyView() } label: {
                     Label("Your permissions. Your call.", systemImage: "lock.shield")
                         .font(.caption).foregroundStyle(HarnessTheme.green)

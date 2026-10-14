@@ -120,8 +120,9 @@ public actor AgentRuntime {
                     var result: String
                     do {
                         guard let definition = tools.first(where: { $0.name == call.name }) else { throw RuntimeError.unknownTool(call.name) }
-                        guard try await permissions.authorize(tool: definition, agent: currentProfile, detail: encoded(call.arguments), handler: permissionHandler) else { throw RuntimeError.permissionDenied(call.name) }
-                        result = try await execute(call, definition: definition, profile: currentProfile, depth: depth, loadedSkills: &loadedSkills, permissionHandler: permissionHandler)
+                        let preparedRemote = call.name == "remote_agent_run" ? try remotePlan(for: call, state: await store.load()) : nil
+                        guard try await permissions.authorize(tool: definition, agent: currentProfile, detail: preparedRemote?.permissionDetail ?? encoded(call.arguments), handler: permissionHandler) else { throw RuntimeError.permissionDenied(call.name) }
+                        result = try await execute(call, definition: definition, profile: currentProfile, depth: depth, loadedSkills: &loadedSkills, permissionHandler: permissionHandler, approvedRemotePlan: preparedRemote)
                         try await audit("\(profile.name) used \(call.name)", detail: "Arguments: \(encoded(call.arguments))\nResult: \(String(result.prefix(24_000)))")
                     } catch is CancellationError { throw CancellationError() }
                     catch { hadToolError = true; result = "Tool error: \(error.localizedDescription)" }
@@ -156,6 +157,11 @@ public actor AgentRuntime {
         HarnessTools.all.filter { definition in
             guard profile.capabilities.contains(definition.capability) else { return false }
             if definition.name == "agent_delegate" { return depth == 0 && profile.id == "god" }
+            if definition.name == "remote_agent_run" {
+                return depth == 0 && profile.id == "god" && externalExecutor != nil && state.remoteAgentConnections.contains { connection in
+                    connection.enabled && state.devices.contains { $0.id == connection.deviceID && $0.capabilities.contains(.computerExecute) }
+                }
+            }
             if definition.name.hasPrefix("vault_") { return vault != nil }
             if [.computerRead, .computerWrite, .computerExecute].contains(definition.capability) {
                 return externalExecutor != nil && state.devices.contains { $0.capabilities.contains(definition.capability) }
@@ -190,6 +196,11 @@ public actor AgentRuntime {
             return "\(device.id): \(device.name); granted capabilities: \(capabilities.map(\.rawValue).sorted().joined(separator: ", "))"
         }
         if !deviceMetadata.isEmpty && provider.supportsToolCalling { messages.append(AgentMessage(role: .system, content: "[Paired computer metadata]\n" + deviceMetadata.joined(separator: "\n"))) }
+        if tools.contains(where: { $0.name == "remote_agent_run" }) && provider.supportsToolCalling {
+            let routes = state.remoteAgentConnections.filter { connection in connection.enabled && state.devices.contains { $0.id == connection.deviceID && $0.capabilities.contains(.computerExecute) } }
+            let metadata = routes.map { "\($0.id): \($0.name); runtime: \($0.runtime.rawValue); device: \($0.deviceID); route: \($0.routeDescription)" }.joined(separator: "\n")
+            messages.append(AgentMessage(role: .system, content: "[Saved external agent routes]\n" + metadata + "\nUse remote_agent_run to delegate a specific task. These are saved routes, not proof a machine is online. Report tool results, including failures and timeouts, accurately. Do not invent SSH aliases or use permission-bypass flags."))
+        }
         let window = compressedMessages(session.messages, existingSummary: session.summary, budget: compactLocal ? 4_000 : 28_000, summaryLimit: compactLocal ? 1_000 : 6_000)
         messages.append(contentsOf: window)
         let textOnly = !provider.supportsToolCalling
@@ -227,7 +238,7 @@ public actor AgentRuntime {
         return String(text.prefix(limit)) + "\n[Excerpt; remainder omitted from on-device context.]"
     }
 
-    private func execute(_ call: ToolCall, definition: ToolDefinition, profile: AgentProfile, depth: Int, loadedSkills: inout Set<String>, permissionHandler: @escaping PermissionHandler) async throws -> String {
+    private func execute(_ call: ToolCall, definition: ToolDefinition, profile: AgentProfile, depth: Int, loadedSkills: inout Set<String>, permissionHandler: @escaping PermissionHandler, approvedRemotePlan: RemoteAgentExecutionPlan? = nil) async throws -> String {
         let state = try await store.load()
         guard let liveProfile = state.agents.first(where: { $0.id == profile.id }), PermissionKernel.decision(for: definition, agent: liveProfile, rules: state.permissionRules) != .deny else { throw RuntimeError.permissionDenied(call.name) }
         switch call.name {
@@ -274,6 +285,12 @@ public actor AgentRuntime {
             try await audit("\(profile.name) delegated to \(child.name)", detail: task)
             let result = try await runTurn(input: task, sessionID: UUID(), agentID: child.id, depth: depth + 1, permissionHandler: permissionHandler)
             return result.messages.last(where: { $0.role == .assistant && $0.toolCalls.isEmpty })?.content ?? "Specialist finished without a final message."
+        case "remote_agent_run":
+            guard depth == 0, profile.id == "god", let executor = externalExecutor, let approvedRemotePlan else { throw RuntimeError.delegationLimit }
+            let livePlan = try remotePlan(for: call, state: state)
+            guard livePlan == approvedRemotePlan else { throw RuntimeError.invalidArguments("The remote agent route changed after approval. Review the new route before retrying.") }
+            try Task.checkCancellation()
+            return try await executor.execute(livePlan.toolCall(id: call.id), device: livePlan.device)
         case "computer_readFile", "computer_writeFile", "computer_execute":
             let id = try string("deviceID", call)
             guard let executor = externalExecutor, let device = state.devices.first(where: { $0.id == id }), device.capabilities.contains(definition.capability) else { throw RuntimeError.deviceUnavailable(id) }
@@ -290,6 +307,15 @@ public actor AgentRuntime {
             return try await executor.execute(call, device: device)
         default: throw RuntimeError.unknownTool(call.name)
         }
+    }
+
+    private func remotePlan(for call: ToolCall, state: HarnessState) throws -> RemoteAgentExecutionPlan {
+        let id = try string("connectionID", call)
+        guard let connection = state.remoteAgentConnections.first(where: { $0.id == id }),
+              let device = state.devices.first(where: { $0.id == connection.deviceID }) else {
+            throw RuntimeError.invalidArguments("The saved remote agent connection is unavailable.")
+        }
+        return try RemoteAgentExecutionPlan(connection: connection, device: device, task: string("task", call))
     }
 
     private func string(_ key: String, _ call: ToolCall) throws -> String {

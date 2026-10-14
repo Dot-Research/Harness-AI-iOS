@@ -109,6 +109,7 @@ public struct UITextContentType: RawRepresentable, Hashable, Sendable {
 
 /// Mirrors how Swift sees the real protocol's optional requirements (they come back optional).
 @MainActor public protocol UITextDocumentProxy: AnyObject {
+    var documentIdentifier: UUID { get }
     var documentContextBeforeInput: String? { get }
     var documentContextAfterInput: String? { get }
     var selectedText: String? { get }

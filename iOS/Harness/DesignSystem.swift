@@ -8,6 +8,7 @@ enum HarnessTheme {
     static let text = Color(red: 0.94, green: 0.91, blue: 0.85)
     static let secondary = Color(red: 0.60, green: 0.63, blue: 0.62)
     static let coral = Color(red: 0.98, green: 0.49, blue: 0.38)
+    static let purple = Color(red: 167.0 / 255, green: 139.0 / 255, blue: 250.0 / 255)
     static let amber = Color(red: 0.89, green: 0.76, blue: 0.48)
     static let green = Color(red: 0.62, green: 0.78, blue: 0.66)
     static let border = Color.white.opacity(0.09)
@@ -16,13 +17,11 @@ enum HarnessTheme {
 struct HarnessMark: View {
     var size: CGFloat = 72
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.29).fill(HarnessTheme.coral)
-            Image(systemName: "h.square.fill")
-                .font(.system(size: size * 0.62, weight: .light))
-                .foregroundStyle(HarnessTheme.background)
-        }
+        Image("HarnessLogo")
+            .resizable()
+            .scaledToFit()
         .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22))
         .accessibilityHidden(true)
     }
 }

@@ -7,6 +7,13 @@ public final class DarwinNotificationObserver {
     public static func post(_ name: String) {}
 }
 
+#if os(Linux)
 extension FileManager {
     public func containerURL(forSecurityApplicationGroupIdentifier groupIdentifier: String) -> URL? { nil }
 }
+
+extension URL {
+    public func startAccessingSecurityScopedResource() -> Bool { false }
+    public func stopAccessingSecurityScopedResource() {}
+}
+#endif

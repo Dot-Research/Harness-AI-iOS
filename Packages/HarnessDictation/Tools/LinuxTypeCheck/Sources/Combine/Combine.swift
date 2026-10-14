@@ -37,6 +37,7 @@ public protocol Publisher {
     associatedtype Failure: Error
 }
 
+#if os(Linux)
 extension NotificationCenter {
     public struct Publisher: Combine.Publisher {
         public typealias Output = Notification
@@ -44,3 +45,8 @@ extension NotificationCenter {
     }
     public func publisher(for name: Notification.Name, object: AnyObject? = nil) -> NotificationCenter.Publisher { Publisher() }
 }
+#else
+// Foundation already exposes this publisher on Apple hosts; adapt its real concrete type
+// to the stand-in protocol instead of declaring a second nested Publisher with the same name.
+extension NotificationCenter.Publisher: Publisher {}
+#endif

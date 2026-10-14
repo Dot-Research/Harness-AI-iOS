@@ -78,6 +78,8 @@ public enum BridgeCommandKind: Codable, Hashable, Sendable {
     /// The keyboard inserted the result; the app should clear it from shared storage.
     case acknowledge(requestID: UUID)
     case rewrite(RewriteJob)
+    /// Stop an in-flight rewrite and discard any result that arrives after cancellation.
+    case cancelRewrite(jobID: UUID)
     case acknowledgeRewrite(jobID: UUID)
     case askGOD(GODHandoff)
     /// The keyboard is visible; keep the warm session alive a little longer.
@@ -137,7 +139,8 @@ public enum HostPhase: String, Codable, Hashable, Sendable {
 public struct BridgeError: Codable, Hashable, Error, Sendable {
     public enum Code: String, Codable, Hashable, Sendable {
         case microphoneDenied, speechDenied, modelUnavailable, routeUnavailable, network,
-             interrupted, cancelled, busy, rewriteUnavailable, emptyTranscript, internalFailure
+             interrupted, cancelled, busy, rewriteUnavailable, emptyTranscript, internalFailure,
+             subscriptionRequired
     }
 
     public var code: Code

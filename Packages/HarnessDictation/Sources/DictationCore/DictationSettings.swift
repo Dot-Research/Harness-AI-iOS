@@ -30,6 +30,9 @@ public struct DictationSettings: Codable, Hashable, Sendable {
     public var haptics: Bool
     /// The cloud endpoint, if the user set one up. The key is in the Keychain under `credentialID`.
     public var cloudEndpoint: TranscriptionEndpoint?
+    /// Optional so older settings decode without resetting recording/history preferences.
+    public var appleRewriteRoute: AppleRewriteRoute?
+    public var effectiveAppleRewriteRoute: AppleRewriteRoute { appleRewriteRoute ?? .localOnly }
 
     public init(
         routePreference: RoutePreference = .automatic,
@@ -46,7 +49,8 @@ public struct DictationSettings: Codable, Hashable, Sendable {
         historyEnabled: Bool = false,
         historyRetentionDays: Int = 7,
         haptics: Bool = true,
-        cloudEndpoint: TranscriptionEndpoint? = nil
+        cloudEndpoint: TranscriptionEndpoint? = nil,
+        appleRewriteRoute: AppleRewriteRoute? = nil
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.routePreference = routePreference
@@ -64,6 +68,7 @@ public struct DictationSettings: Codable, Hashable, Sendable {
         self.historyRetentionDays = historyRetentionDays
         self.haptics = haptics
         self.cloudEndpoint = cloudEndpoint
+        self.appleRewriteRoute = appleRewriteRoute
     }
 
     public func mode(id: String) -> DictationMode {

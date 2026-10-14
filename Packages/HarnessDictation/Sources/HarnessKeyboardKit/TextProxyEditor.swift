@@ -7,6 +7,12 @@ import DictationCore
 final class TextProxyEditor {
     private let proxy: @MainActor () -> UITextDocumentProxy?
 
+    struct RewriteTarget {
+        let text: String
+        let isSelection: Bool
+        let snapshot: RewriteTargetSnapshot
+    }
+
     /// The last change: what was removed and what was inserted in its place.
     private(set) var lastEdit: (removed: String, inserted: String)?
 
@@ -41,29 +47,50 @@ final class TextProxyEditor {
 
     /// The text Fix/Rewrite/Ask should work on: the selection, else the current paragraph before
     /// the cursor (as much of it as the host app lets a keyboard see).
-    func rewriteTarget() -> (text: String, isSelection: Bool)? {
+    func rewriteTarget() -> RewriteTarget? {
         guard let p = proxy() else { return nil }
-        if let selected = p.selectedText, !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return (selected, true)
+        let snapshot = Self.snapshot(for: p)
+        if let selected = snapshot.selectedText, !selected.isEmpty {
+            guard !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return RewriteTarget(text: selected, isSelection: true, snapshot: snapshot)
         }
-        guard let before = p.documentContextBeforeInput, !before.isEmpty else { return nil }
+        guard let before = snapshot.before, !before.isEmpty else { return nil }
         let paragraph = before.components(separatedBy: "\n").last ?? before
         guard !paragraph.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return (paragraph, false)
+        return RewriteTarget(text: paragraph, isSelection: false, snapshot: snapshot)
     }
 
-    /// Replaces the rewrite target with new text.
-    func replaceTarget(_ target: (text: String, isSelection: Bool), with replacement: String) {
-        guard let p = proxy() else { return }
+    /// Used to discard a pending rewrite when the host changes its document or cursor context.
+    func targetMatches(_ target: RewriteTarget) -> Bool {
+        guard let p = proxy() else { return false }
+        return target.snapshot.matches(Self.snapshot(for: p))
+    }
+
+    /// Replaces only the original rewrite target. A stale result leaves the host text untouched.
+    @discardableResult
+    func replaceTarget(_ target: RewriteTarget, with replacement: String) -> Bool {
+        guard let p = proxy() else { return false }
+        let current = Self.snapshot(for: p)
+        guard target.snapshot.matches(current) else { return false }
         if target.isSelection {
+            guard current.selectedText == target.text else { return false }
             p.insertText(replacement)
         } else {
-            // Only delete if the text before the cursor is still exactly what was read.
-            guard let before = p.documentContextBeforeInput, before.hasSuffix(target.text) else { return }
+            guard let before = current.before, before.hasSuffix(target.text) else { return false }
             for _ in 0..<target.text.count { p.deleteBackward() }
             p.insertText(replacement)
         }
         lastEdit = (removed: target.text, inserted: replacement)
+        return true
+    }
+
+    private static func snapshot(for proxy: UITextDocumentProxy) -> RewriteTargetSnapshot {
+        RewriteTargetSnapshot(
+            documentIdentifier: proxy.documentIdentifier,
+            before: proxy.documentContextBeforeInput,
+            after: proxy.documentContextAfterInput,
+            selectedText: proxy.selectedText
+        )
     }
 
     var canUndo: Bool {

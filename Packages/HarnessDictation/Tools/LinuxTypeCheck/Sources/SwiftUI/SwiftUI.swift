@@ -2,6 +2,9 @@
 // Bodies are never run. Signatures follow Apple's declarations closely enough that wrong member names,
 // argument labels, binding types, result-builder misuse and actor-isolation errors are caught.
 @_exported import Foundation
+#if os(macOS)
+@_exported import CoreGraphics
+#endif
 @_exported import Combine
 import UIKit
 
@@ -210,6 +213,9 @@ public struct Alignment: Equatable, Sendable {
     public static let topLeading = Alignment(), topTrailing = Alignment(), bottomLeading = Alignment(), bottomTrailing = Alignment()
 }
 public enum TextAlignment: Hashable, Sendable { case leading, center, trailing }
+public struct NavigationBarItem: Sendable {
+    public enum TitleDisplayMode: Hashable, Sendable { case automatic, inline, large }
+}
 public enum Edge: Int8, Hashable, Sendable {
     case top, leading, bottom, trailing
     public struct Set: OptionSet, Sendable {
@@ -376,6 +382,10 @@ public struct NavigationStack<Root: View>: _Leaf {
     public init<Data: MutableCollection & RandomAccessCollection & RangeReplaceableCollection>(path: Binding<Data>, @ViewBuilder root: () -> Root) where Data.Element: Hashable {}
 }
 public struct NavigationLink<Label: View, Destination: View>: _Leaf {}
+extension NavigationLink where Label == Text {
+    public init(_ titleKey: LocalizedStringKey, @ViewBuilder destination: () -> Destination) {}
+    @_disfavoredOverload public init<S: StringProtocol>(_ title: S, @ViewBuilder destination: () -> Destination) {}
+}
 extension NavigationLink where Destination == Never {
     public init<P: Hashable>(value: P?, @ViewBuilder label: () -> Label) {}
 }
@@ -556,6 +566,7 @@ extension View {
 
     public func navigationTitle(_ titleKey: LocalizedStringKey) -> some View { _Modified<Self>() }
     @_disfavoredOverload public func navigationTitle<S: StringProtocol>(_ title: S) -> some View { _Modified<Self>() }
+    public func navigationBarTitleDisplayMode(_ displayMode: NavigationBarItem.TitleDisplayMode) -> some View { _Modified<Self>() }
     public func navigationDestination<D: Hashable, C: View>(for data: D.Type, @ViewBuilder destination: @escaping (D) -> C) -> some View { _Modified<Self>() }
     public func toolbar<Content: View>(@ViewBuilder content: () -> Content) -> some View { _Modified<Self>() }
     public func searchable(text: Binding<String>) -> some View { _Modified<Self>() }

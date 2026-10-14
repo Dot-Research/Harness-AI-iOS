@@ -21,16 +21,13 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from .errors import NodeError
+from .jobs import JobRegistry
+
 CAPABILITIES = frozenset({"readFile", "writeFile", "execute"})
 MAX_BODY = 1024 * 1024 + 4096
 MAX_FILE = 1024 * 1024
 MAX_OUTPUT = 64 * 1024
-
-
-class NodeError(Exception):
-    def __init__(self, code: str, message: str, status: int = 400):
-        super().__init__(message)
-        self.code, self.message, self.status = code, message, status
 
 
 def _secure_permissions(path: Path, directory: bool = False) -> None:
@@ -187,6 +184,7 @@ class Node:
         self.lock = threading.RLock()
         self._processes: set[subprocess.Popen] = set()
         self._closing = False
+        self.jobs = JobRegistry(self)
         self.pairing_token = secrets.token_urlsafe(32)
         self.expires_at = clock() + pairing_seconds
         if self.state_file.exists():
@@ -256,7 +254,10 @@ class Node:
             before = len(self.state["devices"])
             self.state["devices"] = [x for x in self.state["devices"] if x["id"] != device_id]
             self._save()
-            return len(self.state["devices"]) != before
+            revoked = len(self.state["devices"]) != before
+        if revoked:
+            self.jobs.cancel_owner(device_id)
+        return revoked
 
     def _components(self, path: Any) -> list[str]:
         if not isinstance(path, str) or not path or len(path) > 4096:
@@ -376,6 +377,15 @@ class Node:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # macOS refuses to signal a process group whose members have all exited but are not
+                # reaped yet (Linux reports no such process). Nothing is left to stop then; if the
+                # process somehow is still running, stop it directly.
+                if process.poll() is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
         elif process.poll() is None:
             try:
                 subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
@@ -386,6 +396,8 @@ class Node:
     def close(self):
         with self.lock:
             self._closing = True
+        self.jobs.close()
+        with self.lock:
             processes = list(self._processes)
         for process in processes:
             self._terminate(process)
@@ -394,6 +406,9 @@ class Node:
 class NodeHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    # Match the bounded worker capacity. The inherited backlog of five resets
+    # legitimate bursts of eight simultaneous TLS retries on macOS.
+    request_queue_size = 32
 
     def __init__(self, address, node: Node, certificate: Path, key: Path):
         self.node = node
@@ -481,6 +496,10 @@ class Handler(BaseHTTPRequestHandler):
             node = self.server.node
             if self.path == "/pair":
                 self._respond(200, node.pair(body))
+            elif self.path in {"/tools/jobs/start", "/tools/jobs/status", "/tools/jobs/cancel"}:
+                owner = node.authorize(self.headers.get("Authorization"), "execute")["id"]
+                function = {"start": node.jobs.start, "status": node.jobs.status, "cancel": node.jobs.cancel}[self.path.rsplit("/", 1)[1]]
+                self._respond(200, function(owner, body))
             elif self.path in {"/tools/readFile", "/tools/writeFile", "/tools/execute"}:
                 capability = self.path.rsplit("/", 1)[1]
                 node.authorize(self.headers.get("Authorization"), capability)

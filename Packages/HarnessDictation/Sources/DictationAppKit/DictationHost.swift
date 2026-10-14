@@ -22,19 +22,24 @@ public final class DictationHost: ObservableObject {
         /// Optional: GOD / ModelRouter, used for Fix and Rewrite only when the on-device model is
         /// unavailable. It applies its own routing and permission rules.
         public var fallbackRewriter: TextRewriter?
+        /// Evaluated at every session event. Harness injects verified subscription access;
+        /// independent library clients retain their existing unrestricted behavior by default.
+        public var checkAccess: @MainActor () -> DictationAccessDecision
 
         public init(
             group: AppGroupConfiguration = AppGroupConfiguration(),
             credentials: CredentialProvider = KeychainCredentialProvider(),
             computer: PairedComputerTranscription? = nil,
             rewriter: TextRewriter = OnDeviceRewriter(),
-            fallbackRewriter: TextRewriter? = nil
+            fallbackRewriter: TextRewriter? = nil,
+            checkAccess: @escaping @MainActor () -> DictationAccessDecision = { .allowed }
         ) {
             self.group = group
             self.credentials = credentials
             self.computer = computer
             self.rewriter = rewriter
             self.fallbackRewriter = fallbackRewriter
+            self.checkAccess = checkAccess
         }
     }
 
@@ -49,6 +54,7 @@ public final class DictationHost: ObservableObject {
     /// A section of the Dictation tab the app should navigate to (from a deep link).
     @Published public var requestedSection: String?
     @Published public private(set) var lastError: String?
+    @Published public private(set) var accessDecision: DictationAccessDecision = .allowed
 
     /// Called when the keyboard hands text to GOD. The app opens the GOD conversation with it.
     /// Handoffs that arrive before this is set (cold launch) are delivered when it is.
@@ -63,6 +69,7 @@ public final class DictationHost: ObservableObject {
     private var pendingHandoffs: [GODHandoff] = []
 
     public let settingsStore: DictationSettingsStore
+    public let instructionsStore: DictationInstructionsStore
     public var settings: DictationSettings { settingsStore.settings }
 
     // MARK: Private
@@ -85,12 +92,17 @@ public final class DictationHost: ObservableObject {
     private var publishScheduled = false
     private var lastHeartbeatWrite = Date.distantPast
     private var settingsCancellable: AnyCancellable?
+    private var rewriteTask: Task<Void, Never>?
+    private var activeRewriteID: UUID?
+    private var finishTask: Task<Void, Never>?
 
     public init(dependencies: Dependencies = Dependencies()) {
         deps = dependencies
+        accessDecision = dependencies.checkAccess()
         files = BridgeFiles(group: dependencies.group)
         let store = DictationSettingsStore(group: dependencies.group)
         settingsStore = store
+        instructionsStore = DictationInstructionsStore(group: dependencies.group)
         machine = SessionMachine(config: Self.machineConfig(from: store.settings))
         history = historyStore.load()
 
@@ -127,8 +139,10 @@ public final class DictationHost: ObservableObject {
         guard let destination = HarnessLink.parse(url) else { return false }
         switch destination {
         case .dictate:
-            showsHandoff = true
-            Task { await activate() }
+            Task {
+                await activate()
+                showsHandoff = machine.phase != .inactive
+            }
         case .askGOD:
             processCommands()
         case let .dictationTab(section):
@@ -153,6 +167,9 @@ public final class DictationHost: ObservableObject {
 
     /// Starts the microphone session. Call only while the app is in the foreground.
     public func activate() async {
+        guard refreshAccess().isAllowed else {
+            return failPendingStarts(.subscriptionRequired, accessDecision.denialMessage ?? "A Harness subscription is required.")
+        }
         switch AudioCapture.permission {
         case .undetermined:
             guard await AudioCapture.requestPermission() else { return failPendingStarts(.microphoneDenied, "Microphone access is off for Harness.") }
@@ -161,17 +178,17 @@ public final class DictationHost: ObservableObject {
         default:
             break
         }
-        apply(machine.handle(.activate, now: Date()))
+        apply(sessionEffects(.activate, now: Date()))
         processCommands()
     }
 
     private func handleInterruption() {
-        apply(machine.handle(.audioInterrupted, now: Date()))
+        apply(sessionEffects(.audioInterrupted, now: Date()))
     }
 
     /// Turn the microphone off now (the "Stop mic" button).
     public func endSession() {
-        apply(machine.handle(.endSession, now: Date()))
+        apply(sessionEffects(.endSession, now: Date()))
         showsHandoff = false
     }
 
@@ -189,23 +206,57 @@ public final class DictationHost: ObservableObject {
     /// Turns the mic on if needed, then starts `request`. Tries once: if the microphone can't start
     /// (permission off, audio session refused), the request fails instead of retrying.
     private func activateAndStart(_ request: DictationRequest) async {
+        guard refreshAccess().isAllowed else {
+            apply(sessionEffects(.start(request), now: Date()))
+            return
+        }
         if machine.phase == .inactive { await activate() }
         guard machine.phase != .inactive else {
-            let code: BridgeError.Code = AudioCapture.permission == .granted ? .interrupted : .microphoneDenied
+            let code: BridgeError.Code = accessDecision.isAllowed ? (AudioCapture.permission == .granted ? .interrupted : .microphoneDenied) : .subscriptionRequired
             deliver(DictationOutcome(requestID: request.id, text: nil, route: nil, duration: 0, completedAt: Date(),
                                      error: BridgeError(code, lastError ?? "Couldn't turn on the microphone.")))
             return
         }
-        apply(machine.handle(.start(request), now: Date()))
+        apply(sessionEffects(.start(request), now: Date()))
     }
 
     public func stopLocalDictation(_ id: UUID) {
-        apply(machine.handle(.stop(id), now: Date()))
+        apply(sessionEffects(.stop(id), now: Date()))
     }
 
     public func cancelLocalDictation(_ id: UUID) {
         localRequestIDs.remove(id)
-        apply(machine.handle(.cancel(id), now: Date()))
+        apply(sessionEffects(.cancel(id), now: Date()))
+    }
+
+    /// Refresh after entitlement changes or returning to the foreground. A revoked subscription
+    /// ends a warm session immediately; each event also rechecks for expiration independently.
+    @discardableResult
+    public func refreshAccess() -> DictationAccessDecision {
+        let decision = deps.checkAccess()
+        let previousDenial = accessDecision.denialMessage
+        accessDecision = decision
+        if let message = decision.denialMessage {
+            lastError = message
+            status.notice = message
+            apply(machine.handle(.tick, now: Date(), access: decision))
+            showsHandoff = false
+        } else if let previousDenial {
+            if lastError == previousDenial { lastError = nil }
+            if status.notice == previousDenial { status.notice = nil }
+            publish()
+        }
+        return decision
+    }
+
+    private func sessionEffects(_ event: SessionMachine.Event, now: Date) -> [SessionMachine.Effect] {
+        let decision = deps.checkAccess()
+        accessDecision = decision
+        if let message = decision.denialMessage {
+            status.notice = message
+            lastError = message
+        }
+        return machine.handle(event, now: now, access: decision)
     }
 
     // MARK: History
@@ -257,23 +308,25 @@ public final class DictationHost: ObservableObject {
             switch command.kind {
             case let .start(request):
                 guard age < 60 else { continue }
-                apply(machine.handle(.start(request), now: now))
+                apply(sessionEffects(.start(request), now: now))
             case let .stop(id):
-                apply(machine.handle(.stop(id), now: now))
+                apply(sessionEffects(.stop(id), now: now))
             case let .cancel(id):
-                apply(machine.handle(.cancel(id), now: now))
+                apply(sessionEffects(.cancel(id), now: now))
             case let .acknowledge(id):
                 if status.outcome?.requestID == id { status.outcome = nil }
             case let .rewrite(job):
                 guard age < 60 else { continue }
                 runRewrite(job)
+            case let .cancelRewrite(jobID):
+                cancelRewrite(jobID)
             case let .acknowledgeRewrite(jobID):
                 if status.rewrite?.jobID == jobID { status.rewrite = nil }
             case let .askGOD(handoff):
                 guard age < 300 else { continue }
                 if let onAskGOD { onAskGOD(handoff) } else { pendingHandoffs.append(handoff) }
             case .keepWarm:
-                apply(machine.handle(.keepWarm, now: now))
+                apply(sessionEffects(.keepWarm, now: now))
             case .endSession:
                 endSession()
             }
@@ -294,7 +347,7 @@ public final class DictationHost: ObservableObject {
                 } catch {
                     lastError = error.localizedDescription
                     status.notice = error.localizedDescription
-                    apply(machine.handle(.endSession, now: Date()))
+                    apply(sessionEffects(.endSession, now: Date()))
                 }
             case .stopAudio:
                 capture.stop()
@@ -320,6 +373,7 @@ public final class DictationHost: ObservableObject {
     }
 
     private func beginCapture(_ request: DictationRequest) async {
+        guard machine.activeRequest?.id == request.id else { return }
         let settings = self.settings
         let suggestion = settings.smartModeFromField
             ? ModeSuggester.suggest(for: request.field, userDefaultModeID: request.modeID)
@@ -344,7 +398,9 @@ public final class DictationHost: ObservableObject {
         case .onDevice:
             engine = OnDeviceTranscriber(locale: locale, contextualStrings: settings.dictionary.contextualStrings)
         case .myComputer:
-            guard let target = await deps.computer?.transcriptionEndpoint() else {
+            let target = await deps.computer?.transcriptionEndpoint()
+            guard machine.activeRequest?.id == request.id else { return }
+            guard let target else {
                 failActive(request.id, BridgeError(.routeUnavailable, "Your computer isn't reachable right now."))
                 return
             }
@@ -361,7 +417,7 @@ public final class DictationHost: ObservableObject {
                                        vocabularyPrompt: TranscriptionAPI.vocabularyPrompt(from: settings.dictionary),
                                        maxSeconds: settings.maxUtteranceSeconds)
         }
-        guard machine.activeRequest?.id == request.id else { return }
+        guard machine.activeRequest?.id == request.id else { await engine.cancel(); return }
         transcriber = engine
         // Called from the recognizer's thread: hop to the main actor explicitly.
         engine.onPartial = { @Sendable [weak self] text in
@@ -373,8 +429,10 @@ public final class DictationHost: ObservableObject {
         }
         do {
             try await engine.prepare()
+            guard machine.activeRequest?.id == request.id else { await engine.cancel(); return }
             if decision.needsModelDownload { status.notice = nil; publishSoon() }
         } catch {
+            guard machine.activeRequest?.id == request.id else { await engine.cancel(); return }
             gate.detach()
             failActive(request.id, BridgeError(.modelUnavailable, error.localizedDescription))
         }
@@ -390,7 +448,7 @@ public final class DictationHost: ObservableObject {
         guard machine.activeRequest?.id == id else { return }
         status.level = meter.level
         if meter.silenceReached {
-            apply(machine.handle(.silence(id), now: Date()))
+            apply(sessionEffects(.silence(id), now: Date()))
         } else {
             publishSoon()
         }
@@ -400,16 +458,19 @@ public final class DictationHost: ObservableObject {
         gate.detach()
         status.level = 0
         guard let engine = transcriber, let request = machine.activeRequest, request.id == id else {
-            apply(machine.handle(.finished(id), now: Date()))
+            apply(sessionEffects(.finished(id), now: Date()))
             return
         }
         let started = request.createdAt
         let route = activeRoute
         let suggestion = activeSuggestion
-        Task {
+        finishTask?.cancel()
+        finishTask = Task {
             do {
                 let raw = try await engine.finish()
+                guard !Task.isCancelled, machine.activeRequest?.id == id else { return }
                 let text = await postProcess(raw, request: request, suggestion: suggestion)
+                guard !Task.isCancelled, machine.activeRequest?.id == id else { return }
                 if text.isEmpty {
                     deliver(DictationOutcome(requestID: id, text: nil, route: route, duration: Date().timeIntervalSince(started), completedAt: Date(),
                                              error: BridgeError(.emptyTranscript, "Didn't catch that. Try again a little closer to the mic.")))
@@ -418,16 +479,20 @@ public final class DictationHost: ObservableObject {
                     recordHistory(text: text, modeID: suggestion?.modeID ?? request.modeID, route: route)
                 }
             } catch {
+                guard !Task.isCancelled, machine.activeRequest?.id == id else { return }
                 let code: BridgeError.Code = (error as? URLError) != nil ? .network : .internalFailure
                 deliver(DictationOutcome(requestID: id, text: nil, route: route, duration: Date().timeIntervalSince(started), completedAt: Date(),
                                          error: BridgeError(code, error.localizedDescription)))
             }
             transcriber = nil
-            apply(machine.handle(.finished(id), now: Date()))
+            finishTask = nil
+            apply(sessionEffects(.finished(id), now: Date()))
         }
     }
 
     private func abortCapture(_ id: UUID) {
+        finishTask?.cancel()
+        finishTask = nil
         let engine = gate.detach() ?? transcriber
         transcriber = nil
         status.partialText = nil
@@ -437,12 +502,13 @@ public final class DictationHost: ObservableObject {
     }
 
     private func failActive(_ id: UUID, _ error: BridgeError) {
+        guard machine.activeRequest?.id == id else { return }
         gate.detach()
         let engine = transcriber
         transcriber = nil
         Task { await engine?.cancel() }
         deliver(DictationOutcome(requestID: id, text: nil, route: activeRoute, duration: 0, completedAt: Date(), error: error))
-        apply(machine.handle(.finished(id), now: Date()))
+        apply(sessionEffects(.finished(id), now: Date()))
     }
 
     private func failPendingStarts(_ code: BridgeError.Code, _ message: String) {
@@ -470,9 +536,25 @@ public final class DictationHost: ObservableObject {
         var text = TranscriptCleaner(options: options).clean(raw)
         text = settings.dictionary.apply(to: text)
         let polishAllowed = suggestion?.allowsAIPolish ?? true
-        if mode.aiPolish, polishAllowed, deps.rewriter.isAvailable, !text.isEmpty {
-            if let polished = try? await deps.rewriter.rewrite(text, instructions: RewritePromptBuilder.polishInstructions(for: mode)) {
-                text = settings.dictionary.apply(to: polished)
+        if mode.aiPolish, polishAllowed, !text.isEmpty {
+            guard deps.rewriter.isAvailable else {
+                let notice = "AI cleanup is unavailable for the selected route. Kept the locally cleaned transcript. Check Speak's AI rewrite route."
+                status.notice = notice
+                lastError = notice
+                return text
+            }
+            do {
+                let voice = try instructionsStore.load()
+                let polished = try await deps.rewriter.rewrite(text, instructions: RewritePromptBuilder.polishInstructions(for: mode, userInstructions: voice))
+                try Task.checkCancellation()
+                text = settings.dictionary.apply(to: try RewriteOutputSanitizer.clean(polished, original: text))
+            } catch is CancellationError {
+                return text
+            } catch {
+                // Rule-based dictation remains usable; expose why the requested polish was skipped.
+                let notice = "AI polish wasn't applied: \(error.localizedDescription) Kept the locally cleaned transcript."
+                status.notice = notice
+                lastError = notice
             }
         }
         return text
@@ -498,6 +580,10 @@ public final class DictationHost: ObservableObject {
     // MARK: Rewrite jobs
 
     private func runRewrite(_ job: RewriteJob) {
+        rewriteTask?.cancel()
+        rewriteTask = nil
+        activeRewriteID = job.id
+        status.rewrite = nil
         let rewriter: TextRewriter?
         if deps.rewriter.isAvailable {
             rewriter = deps.rewriter
@@ -507,20 +593,44 @@ public final class DictationHost: ObservableObject {
             rewriter = nil
         }
         guard let rewriter else {
-            status.rewrite = RewriteOutcome(jobID: job.id, text: nil, error: BridgeError(.rewriteUnavailable, "Fix and Rewrite need Apple Intelligence or a model in Settings > Providers."), completedAt: Date())
+            activeRewriteID = nil
+            status.rewrite = RewriteOutcome(jobID: job.id, text: nil, error: BridgeError(.rewriteUnavailable, "The selected AI route is unavailable. Check AI rewrite route in Speak settings. Your text is unchanged."), completedAt: Date())
             publish()
             return
         }
-        let instructions = RewritePromptBuilder.instructions(for: job.action, modes: settings.modes)
-        Task {
+        let instructions: String
+        do {
+            instructions = RewritePromptBuilder.instructions(for: job.action, modes: settings.modes, userInstructions: try instructionsStore.load())
+        } catch {
+            activeRewriteID = nil
+            status.rewrite = RewriteOutcome(jobID: job.id, text: nil, error: BridgeError(.rewriteUnavailable, error.localizedDescription), completedAt: Date())
+            publish()
+            return
+        }
+        let dictionary = settings.dictionary
+        rewriteTask = Task {
             do {
                 let text = try await rewriter.rewrite(job.text, instructions: instructions)
-                status.rewrite = RewriteOutcome(jobID: job.id, text: settings.dictionary.apply(to: text), error: nil, completedAt: Date())
+                guard !Task.isCancelled, activeRewriteID == job.id else { return }
+                let cleaned = try RewriteOutputSanitizer.clean(text, original: job.text)
+                status.rewrite = RewriteOutcome(jobID: job.id, text: dictionary.apply(to: cleaned), error: nil, completedAt: Date())
             } catch {
-                status.rewrite = RewriteOutcome(jobID: job.id, text: nil, error: BridgeError(.rewriteUnavailable, "Couldn't rewrite that. Your text is unchanged."), completedAt: Date())
+                guard !Task.isCancelled, activeRewriteID == job.id else { return }
+                status.rewrite = RewriteOutcome(jobID: job.id, text: nil, error: BridgeError(.rewriteUnavailable, "Couldn't rewrite that: \(error.localizedDescription) Your text is unchanged."), completedAt: Date())
             }
+            activeRewriteID = nil
+            rewriteTask = nil
             publish()
         }
+    }
+
+    private func cancelRewrite(_ jobID: UUID) {
+        if activeRewriteID == jobID {
+            activeRewriteID = nil
+            rewriteTask?.cancel()
+            rewriteTask = nil
+        }
+        if status.rewrite?.jobID == jobID { status.rewrite = nil }
     }
 
     // MARK: Status publishing
@@ -533,7 +643,7 @@ public final class DictationHost: ObservableObject {
     }
 
     private func tick() {
-        let effects = machine.handle(.tick, now: Date())
+        let effects = sessionEffects(.tick, now: Date())
         if !effects.isEmpty {
             apply(effects)
         } else if Date().timeIntervalSince(lastHeartbeatWrite) >= 1 {

@@ -33,6 +33,17 @@ final class CompanionClient: ExternalToolExecutor, @unchecked Sendable {
     func execute(_ call: ToolCall, device: PairedDevice) async throws -> String {
         let base = try CompanionPairingPayload.validateURL(device.url)
         guard CompanionPairingPayload.validFingerprint(device.fingerprint) else { throw PairingFailure.invalidFingerprint }
+        if call.name == "remote_agent_execute" {
+            guard device.capabilities.contains(.computerExecute) else { throw PairingFailure.capabilityDenied }
+            let request = try RemoteAgentJobRequest(call: call)
+            guard let token = try credentials.token(for: "companion:\(device.id)"), CompanionPairingPayload.validToken(token) else { throw PairingFailure.missingCredential }
+            return await RemoteAgentJobRunner.run(request: request) { [self] operation, arguments in
+                guard let body = try JSONSerialization.jsonObject(with: JSONEncoder().encode(arguments)) as? [String: Any] else { throw PairingFailure.invalidArguments }
+                // Each short start/status/cancel request uses the same pinned TLS transport.
+                // The runner creates cancellation in a fresh task, with this immutable route.
+                return try await send(path: operation.path, body: body, base: base, fingerprint: device.fingerprint, token: token, requestTimeout: 15)
+            }
+        }
         let path: String
         let body: [String: Any]
         let capability: Capability
@@ -79,15 +90,15 @@ final class CompanionClient: ExternalToolExecutor, @unchecked Sendable {
         return path
     }
 
-    private func send(path: String, body: [String: Any], base: URL, fingerprint: String, token: String?) async throws -> Data {
+    private func send(path: String, body: [String: Any], base: URL, fingerprint: String, token: String?, requestTimeout: TimeInterval = 70) async throws -> Data {
         guard let host = base.host else { throw PairingFailure.insecureURL }
         let delegate = PinnedCompanionDelegate(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")), fingerprint: fingerprint)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.waitsForConnectivity = false
-        configuration.timeoutIntervalForRequest = 70
-        configuration.timeoutIntervalForResource = 90
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = requestTimeout + 20
         let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         var request = URLRequest(url: base.appendingPathComponent(path))

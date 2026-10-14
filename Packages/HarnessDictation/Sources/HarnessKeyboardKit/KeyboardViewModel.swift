@@ -37,10 +37,13 @@ public final class KeyboardViewModel: ObservableObject {
         self?.controller?.textDocumentProxy
     }
     private let localRewriter = OnDeviceRewriter()
+    private lazy var instructionsStore = DictationInstructionsStore(group: group)
     private var pendingRequestID: UUID?
     /// Requests this keyboard finished or cancelled; never picked up again from status.
     private var dismissedRequestIDs = Set<UUID>()
-    private var pendingRewrite: (job: RewriteJob, target: (text: String, isSelection: Bool))?
+    private var pendingRewrite: (job: RewriteJob, target: TextProxyEditor.RewriteTarget)?
+    private var rewriteTask: Task<Void, Never>?
+    private var activeRewriteID: UUID?
     private var waitingSince: Date?
     private var messageTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
@@ -88,10 +91,15 @@ public final class KeyboardViewModel: ObservableObject {
 
     func disappear() {
         client?.stopObserving()
+        if activeRewriteID != nil || pendingRewrite != nil { cancelRewrite() }
         if phase == .rewriteMenu { phase = .idle }
     }
 
     func textDidChange() {
+        if let pending = pendingRewrite, !editor.targetMatches(pending.target) {
+            cancelRewrite()
+            show("The text or selection changed. Select it again to rewrite.")
+        }
         refreshUndo()
     }
 
@@ -132,6 +140,10 @@ public final class KeyboardViewModel: ObservableObject {
             phase = .waitingForApp
             waitingSince = Date()
             guard let controller, HostAppOpener.open(HarnessLink.url(for: .dictate(requestID: request.id)), from: controller) else {
+                client.send(.cancel(requestID: request.id))
+                dismissedRequestIDs.insert(request.id)
+                client.setPolling(false)
+                waitingSince = nil
                 phase = .idle
                 pendingRequestID = nil
                 show("Open the Harness app once to turn on the mic, then come back.")
@@ -148,6 +160,7 @@ public final class KeyboardViewModel: ObservableObject {
     }
 
     public func cancel() {
+        cancelRewrite()
         if let id = pendingRequestID {
             client?.send(.cancel(requestID: id))
             dismissedRequestIDs.insert(id)
@@ -272,29 +285,56 @@ public final class KeyboardViewModel: ObservableObject {
     }
 
     private func rewrite(_ action: RewriteAction) {
+        cancelRewrite()
         guard let target = editor.rewriteTarget() else {
             show("Select text, or type something first.")
             return
         }
         let modes = self.modes
+        let settings = settingsStore?.settings ?? DictationSettings()
+        let job = RewriteJob(action: action, text: target.text)
+        activeRewriteID = job.id
+        pendingRewrite = (job, target)
         phase = .rewriting
-        Task {
+        rewriteTask = Task {
             // On-device first, inside the keyboard.
-            if localRewriter.isAvailable {
-                let instructions = RewritePromptBuilder.instructions(for: action, modes: modes)
+            if settings.effectiveAppleRewriteRoute != .privateCloudOnly, localRewriter.isAvailable {
+                let voice: String
+                if hasFullAccess {
+                    do { voice = try instructionsStore.load() }
+                    catch {
+                        guard !Task.isCancelled, activeRewriteID == job.id else { return }
+                        cancelRewrite()
+                        show(error.localizedDescription)
+                        return
+                    }
+                } else {
+                    voice = DictationInstructions.defaultText
+                    show("Using the default voice. Full Access is needed for your saved instruction.md.")
+                }
+                let instructions = RewritePromptBuilder.instructions(for: action, modes: modes, userInstructions: voice)
                 if let text = try? await localRewriter.rewrite(target.text, instructions: instructions) {
-                    applyRewrite(text, to: target)
+                    guard !Task.isCancelled, activeRewriteID == job.id else { return }
+                    activeRewriteID = nil
+                    pendingRewrite = nil
+                    rewriteTask = nil
+                    applyRewrite(settings.dictionary.apply(to: text), to: target)
                     return
                 }
             }
+            guard !Task.isCancelled, activeRewriteID == job.id else { return }
+            guard editor.targetMatches(target) else {
+                cancelRewrite()
+                show("The text or selection changed. Select it again to rewrite.")
+                return
+            }
             // Otherwise ask the app (it may use GOD's model routing).
             guard hasFullAccess, let client else {
-                phase = .idle
+                cancelRewrite()
                 show("Rewrite needs Apple Intelligence, or Full Access so Harness can help.")
                 return
             }
-            let job = RewriteJob(action: action, text: target.text)
-            pendingRewrite = (job, target)
+            rewriteTask = nil
             client.send(.rewrite(job))
             client.setPolling(true)
             if !client.status.isAlive(at: Date()), let controller {
@@ -306,8 +346,10 @@ public final class KeyboardViewModel: ObservableObject {
     private func finishRewrite(_ outcome: RewriteOutcome) {
         client?.send(.acknowledgeRewrite(jobID: outcome.jobID))
         client?.setPolling(false)
-        guard let pending = pendingRewrite else { return }
+        guard let pending = pendingRewrite, pending.job.id == outcome.jobID, activeRewriteID == outcome.jobID else { return }
         pendingRewrite = nil
+        activeRewriteID = nil
+        rewriteTask = nil
         if let text = outcome.text {
             applyRewrite(text, to: pending.target)
         } else {
@@ -316,11 +358,26 @@ public final class KeyboardViewModel: ObservableObject {
         }
     }
 
-    private func applyRewrite(_ text: String, to target: (text: String, isSelection: Bool)) {
+    private func applyRewrite(_ text: String, to target: TextProxyEditor.RewriteTarget) {
         phase = .idle
-        editor.replaceTarget(target, with: text)
+        guard editor.replaceTarget(target, with: text) else {
+            show("The text or selection changed. Select it again to rewrite.")
+            return
+        }
         refreshUndo()
         haptic()
+    }
+
+    private func cancelRewrite() {
+        if let activeRewriteID { client?.send(.cancelRewrite(jobID: activeRewriteID)) }
+        activeRewriteID = nil
+        rewriteTask?.cancel()
+        rewriteTask = nil
+        pendingRewrite = nil
+        if phase == .rewriting {
+            phase = .idle
+            client?.setPolling(false)
+        }
     }
 
     public func askHarnessTapped() {

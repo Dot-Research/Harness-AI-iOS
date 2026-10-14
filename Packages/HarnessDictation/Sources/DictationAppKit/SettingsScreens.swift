@@ -2,8 +2,124 @@
 import Speech
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 import DictationCore
 import DictationEngine
+
+// MARK: - Shared voice instructions
+
+private struct InstructionMarkdownDocument: FileDocument {
+    static let markdownType = UTType(importedAs: "net.daringfireball.markdown", conformingTo: .plainText)
+    static var readableContentTypes: [UTType] { [markdownType, .plainText] }
+    var text: String
+
+    init(text: String) { self.text = text }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else {
+            throw DictationInstructions.ValidationError.invalidUTF8
+        }
+        text = try DictationInstructions.decode(data)
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        try DictationInstructions.validate(text)
+        return FileWrapper(regularFileWithContents: Data(text.utf8))
+    }
+}
+
+struct DictationInstructionsView: View {
+    let store: DictationInstructionsStore
+    @State private var draft = ""
+    @State private var saved = ""
+    @State private var message: String?
+    @State private var failed = false
+    @State private var isImporting = false
+    @State private var isExporting = false
+    @State private var exportDocument = InstructionMarkdownDocument(text: "")
+
+    var body: some View {
+        Form {
+            Section {
+                Text("Write the way you want Speak to edit your words. These instructions apply when a mode's AI polish is on, or when you use Fix or Rewrite, across the app and keyboard.")
+                    .font(.subheadline)
+                TextEditor(text: $draft)
+                    .frame(minHeight: 230)
+                    .font(.body)
+                    .autocorrectionDisabled()
+                HStack {
+                    Text("\(draft.utf8.count) / 8192 bytes")
+                        .font(.caption).foregroundStyle(draft.utf8.count > DictationInstructions.maxUTF8Bytes ? Color.red : Color.secondary)
+                    Spacer()
+                    Button("Save") { save() }
+                        .disabled(draft == saved)
+                }
+            } header: {
+                Text("instruction.md")
+            } footer: {
+                Text("A UTF-8 Markdown file stored with Speak. Facts stay intact; modes add their own style. Saving this file does not change the AI route or permit network access.")
+            }
+
+            Section {
+                Button("Import Markdown") { isImporting = true }
+                Button("Export instruction.md") {
+                    do {
+                        try DictationInstructions.validate(draft)
+                        exportDocument = InstructionMarkdownDocument(text: draft)
+                        isExporting = true
+                    } catch { report(error) }
+                }
+                Button("Use default voice") {
+                    draft = DictationInstructions.defaultText
+                    message = "Default voice loaded. Save to apply it."
+                    failed = false
+                }
+            }
+            if let message {
+                Section {
+                    Text(message).font(.footnote).foregroundStyle(failed ? Color.red : Color.secondary)
+                }
+            }
+        }
+        .navigationTitle("Your voice")
+        .task {
+            do {
+                draft = try store.load()
+                saved = draft
+            } catch { report(error) }
+        }
+        .fileImporter(isPresented: $isImporting, allowedContentTypes: [InstructionMarkdownDocument.markdownType, .plainText]) { result in
+            do {
+                let url = try result.get()
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                draft = try DictationInstructionFile.read(url)
+                message = "Imported. Save to apply these instructions."
+                failed = false
+            } catch { report(error) }
+        }
+        .fileExporter(isPresented: $isExporting, document: exportDocument, contentType: InstructionMarkdownDocument.markdownType, defaultFilename: "instruction.md") { result in
+            switch result {
+            case .success: message = "Exported instruction.md."; failed = false
+            case let .failure(error): report(error)
+            }
+        }
+    }
+
+    private func save() {
+        do {
+            try store.save(draft)
+            saved = draft
+            message = "Saved. Speak will use this voice on the next rewrite."
+            failed = false
+        } catch { report(error) }
+    }
+
+    private func report(_ error: Error) {
+        failed = true
+        message = error.localizedDescription
+    }
+}
 
 // MARK: - Mode editor
 
@@ -30,7 +146,7 @@ struct ModeEditorView: View {
                     }
                 }
                 Section {
-                    Toggle("Polish with on-device AI", isOn: modeBinding(mode, \.aiPolish))
+                    Toggle("Polish with AI", isOn: modeBinding(mode, \.aiPolish))
                         .disabled(mode.style == .verbatim)
                     TextField("Instruction (optional)", text: Binding(
                         get: { modeBinding(mode, \.instruction).wrappedValue ?? "" },
@@ -38,7 +154,7 @@ struct ModeEditorView: View {
                     ), axis: .vertical)
                     .lineLimit(2...5)
                 } footer: {
-                    Text("For example: \"Write like I'm texting a client: warm, brief, no emoji.\" The instruction is used with the on-device model, so it stays on this iPhone.")
+                    Text("For example: \"Write like I'm texting a client: warm, brief, no emoji.\" This mode instruction is combined with instruction.md and uses the AI route selected in Speak settings.")
                 }
                 Section {
                     Button("Use as default") { store.update { $0.defaultModeID = modeID } }

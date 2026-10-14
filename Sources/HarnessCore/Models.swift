@@ -120,8 +120,11 @@ public struct HarnessState: Codable, Equatable, Sendable {
     public var sessions: [AgentSession] = []; public var files: [String: String] = [:]; public var skills: [Skill] = []
     public var agents: [AgentProfile] = []; public var proposals: [LearningProposal] = []; public var journey: [JourneyEntry] = []
     public var activity: [ActivityEntry] = []; public var providers: [ProviderConfiguration] = []; public var devices: [PairedDevice] = []
+    /// Optional for backward-compatible decoding of existing local settings.
+    public var remoteAgents: [RemoteAgentConnection]?
+    public var remoteAgentConnections: [RemoteAgentConnection] { remoteAgents ?? [] }
     public var permissionRules: [String: PermissionDecision] = [:]; public var learningMode: LearningMode = .ask
-    public var routingPreference: RoutingPreference = .localOnly; public var directorName = "GOD"; public var auditPrompt = "Act as a security and CTF researcher. Inspect Harness for vulnerabilities and determine whether my data is transmitted, retained, logged or exposed. Show evidence for every finding and distinguish verified findings from assumptions."
+    public var routingPreference: RoutingPreference = .localOnly; public var directorName = "General Orchestrator Director"; public var auditPrompt = "Act as a security and CTF researcher. Inspect Harness for vulnerabilities and determine whether my data is transmitted, retained, logged or exposed. Show evidence for every finding and distinguish verified findings from assumptions."
     public init() {}
 }
 public protocol HarnessStore: Sendable {

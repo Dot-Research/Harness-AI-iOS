@@ -6,12 +6,13 @@ import UIKit
 ///
 /// Keyboard extensions have no supported API for opening URLs, so this walks the responder chain to
 /// the extension process's UIApplication and calls `openURL:options:completionHandler:` dynamically.
-/// This is the approach shipping dictation keyboards use; keep it isolated here so it can be
-/// swapped if Apple adds a sanctioned API. If it fails, the keyboard shows a "Open Harness"
-/// instruction instead.
+/// This is an experimental compatibility path, not a supported keyboard-extension API.
+/// A true return only means invocation was attempted; it does not prove that iOS opened the app.
+/// Supported cold-start alternatives are the app's Start Speak shortcut or manual activation.
+/// If the attempt fails, the keyboard explains how to open Harness instead.
 ///
-/// Since iOS 26.4 the system no longer returns the user to the previous app automatically, so the
-/// app shows "Swipe right along the bottom edge to go back" while the microphone warms up.
+/// Automatic return to the originating app is not assumed. The handoff screen tells the user
+/// how to return after the app starts the microphone.
 enum HostAppOpener {
     @discardableResult
     static func open(_ url: URL, from responder: UIResponder) -> Bool {

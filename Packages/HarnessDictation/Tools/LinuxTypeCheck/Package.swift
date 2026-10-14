@@ -3,6 +3,7 @@ import PackageDescription
 let v5: [SwiftSetting] = [.swiftLanguageMode(.v5)]
 let package = Package(
     name: "TypeCheck",
+    platforms: [.macOS("26.0")],
     targets: [
         .target(name: "AVFoundation", swiftSettings: v5),
         .target(name: "Speech", dependencies: ["AVFoundation"], swiftSettings: v5),
@@ -15,9 +16,10 @@ let package = Package(
         .target(name: "KeyboardLogic", dependencies: ["DictationCore", "DictationEngine", "UIKit", "Combine"], swiftSettings: v5),
         .target(name: "HostLogic", dependencies: ["DictationCore", "DictationEngine", "AVFoundation", "Combine"], swiftSettings: v5),
         .target(name: "ObjectiveC", swiftSettings: v5),
-        .target(name: "SwiftUI", dependencies: ["UIKit", "Combine"], swiftSettings: v5),
+        .target(name: "UniformTypeIdentifiers", swiftSettings: v5),
+        .target(name: "SwiftUI", dependencies: ["UIKit", "Combine", "UniformTypeIdentifiers"], swiftSettings: v5),
         .target(name: "HarnessKeyboardKit", dependencies: ["DictationCore", "DictationEngine", "UIKit", "SwiftUI", "Combine", "ObjectiveC"], swiftSettings: v5),
-        .target(name: "DictationAppKit", dependencies: ["DictationCore", "DictationEngine", "SwiftUI", "UIKit", "AVFoundation", "Speech", "Combine"], swiftSettings: v5),
+        .target(name: "DictationAppKit", dependencies: ["DictationCore", "DictationEngine", "SwiftUI", "UIKit", "AVFoundation", "Speech", "Combine", "UniformTypeIdentifiers"], swiftSettings: v5),
         .target(name: "KeyboardExtension", dependencies: ["HarnessKeyboardKit"], swiftSettings: v5),
     ]
 )

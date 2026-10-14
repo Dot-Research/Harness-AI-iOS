@@ -163,6 +163,9 @@ struct KeyboardRootView: View {
         VStack(spacing: 8) {
             ProgressView()
             Text(title).font(.subheadline).foregroundStyle(palette.secondaryText)
+            if model.phase == .rewriting {
+                Button("Cancel") { model.cancel() }.font(.footnote.weight(.medium))
+            }
         }
     }
 

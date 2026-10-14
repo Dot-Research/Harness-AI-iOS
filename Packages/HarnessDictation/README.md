@@ -1,114 +1,61 @@
-# Harness Dictation
+# Harness Speak
 
-The Dictation tab and the Harness Keyboard: a private, on-device alternative to Diction, Typeless,
-Superwhisper and Wispr Flow, built to section 15 of the Harness spec.
+Speak is the native dictation space and Harness Keyboard. It separates speech recognition, text cleanup, model rewriting and insertion. The app owns the microphone; the keyboard communicates through the shared App Group.
 
-> Dictate | Fix | Rewrite | Ask Harness. On-device first, then your own computer, then (only if you
-> allow it) a cloud endpoint you choose. Audio is never saved.
+## Current behavior
 
-## What it does
+- On-device Apple SpeechAnalyzer transcription, live partial text, personal vocabulary and deterministic cleanup.
+- Optional user-configured cloud speech endpoint. Paired-computer transcription has an adapter boundary but no connected companion speech endpoint yet.
+- Fix, Rewrite, selection handoff to Dot and insertion/undo. Late results are checked against the original field and selection.
+- Shared `Speak/instruction.md` for automatic Polish, Fix and Rewrite. UTF-8 instructions have an 8 KB limit, atomic saving and Markdown import/export.
+- Local Apple text rewriting by default. Explicit PCC-only or local/PCC fallback routes require iOS 27, developer approval/provisioning and runtime availability/quota. PCC is disabled in the checked-in configuration. Text models edit transcripts; they do not transcribe audio.
+- Verified StoreKit subscription access gates recording and keyboard starts. Real product IDs must be configured in the host app. Empty product configuration grants no Speak access.
 
-Compared with the iPhone dictation keyboards named in the spec. Competitor cells come from each
-product's own docs or App Store page (see Sources); "—" means the page doesn't say. Checked 8 Oct 2026.
+Audio buffers stay in memory. History is optional and stores text only. A selected remote transcription provider receives audio; an explicitly selected PCC text route receives the text needed for rewriting. See [privacy details](docs/PRIVACY.md).
 
-| | Harness | Typeless | Wispr Flow | Superwhisper | Diction |
-|---|---|---|---|---|---|
-| Where speech is transcribed | On the iPhone (Apple SpeechAnalyzer); or your paired computer; or a cloud endpoint you choose | Typeless cloud | Wispr servers | On-device or cloud models | On device, a self-hosted server, or Diction One cloud |
-| Works offline | Yes, after a one-time model download | No (cloud only) | No (needs Wi-Fi or cellular) | With on-device models | In on-device mode |
-| Audio | Never stored | Not stored | Discarded under Privacy Mode (enterprise; Android for individuals) | Stays on the phone with on-device models | Never leaves the device in on-device mode |
-| Text history | Off by default, text only, expires after 1/7/30 days | On device; optional cloud sync | On device | In the app's History | — |
-| Cleanup: fillers, self-corrections, lists | On device: rules, plus optional Apple on-device model | Yes | — | Through modes | AI Companion polish |
-| Edit existing text | Fix / Rewrite with Apple's on-device model | Speak to edit | — | — | Edit or rewrite by voice |
-| Personal vocabulary | Yes; also biases the recognizer | Yes | — | Yes (per device) | My Words |
-| Style per app or field | Mode picked from the text field (email field: verbatim; Send key: message) | Tone adapts to the app | — | Modes (e.g. casual for iMessage) | — |
-| Typing keys | Punctuation, space, delete, return; globe for the system keyboard | — | Switches to the system keyboard in number pads | — | Built-in QWERTY |
-| Hand text to an agent | Ask Harness → GOD | — | — | — | — |
+## iOS handoff
 
-Where Harness is behind: Diction has a built-in QWERTY layout, and Typeless and Diction translate
-while you speak. Both are reasonable follow-ups; neither is in section 15 of the spec.
+Start Speak in Harness or through its **Start Speak** shortcut, allow the microphone and return manually to the destination app. While iOS keeps the session warm, the keyboard can start and stop dictation through App Group commands. The orange microphone indicator remains visible until the session stops or expires; the default warm period is five minutes.
 
-## How it works
+The cold keyboard opener includes an experimental responder-chain URL path. It is not a supported keyboard-extension API or proof of App Review acceptance. Use manual/shortcut activation for acceptance testing and verify cold/warm recording, interruptions and insertion on a physical iPhone. Full Access does not grant microphone access. Secure fields and apps that reject custom keyboards use Apple's keyboard.
 
-iOS keyboards cannot use the microphone, so the keyboard hands recording to the app. Wispr Flow's
-keyboard does the same ("In other apps, the keyboard opens Flow to record") and tells users to swipe
-right across the bottom edge to return; Superwhisper's docs say to swipe back on iOS 26.4 and later.
-Harness:
-
-```
- Keyboard extension                    Harness app (owns the mic)
- ──────────────────                    ──────────────────────────
- tap Dictate ──► commands.json ──────► DictationHost
-   (cold: opens harness://dictation)    ├─ SessionMachine: inactive → warm → listening → finishing
-                                        ├─ AudioCapture (AVAudioEngine, background audio mode)
-                                        ├─ AudioGate: drops audio unless a dictation is active
-                                        ├─ Transcriber: on device | my computer | cloud
-                                        ├─ TranscriptCleaner + PersonalDictionary (+ AI polish)
- insert text ◄── status.json ◄─────────┘
-           (Darwin notifications ring the doorbell; App Group files carry the data)
+```text
+Keyboard controls → App Group commands → DictationHost
+                                            ↓
+                          AudioCapture → AudioGate → Transcriber
+                                            ↓
+                           Cleanup → instruction.md → Text rewriter
+                                            ↓
+Keyboard field/selection check ← App Group result ← Final text
 ```
 
-1. The first tap opens Harness, which starts a **warm microphone session** in the foreground. The user
-   swipes back (iOS 26.4+ no longer returns automatically, so the app shows how).
-2. While warm (5 minutes by default), the keyboard starts and stops dictation in place. Audio between
-   dictations is dropped in `AudioGate` and never leaves that function.
-3. Text is cleaned on device, fitted to the cursor (spacing, capitals) and inserted. One tap undoes it.
+## Functional layers
 
-Fix and Rewrite run Apple's on-device model inside the keyboard when available, otherwise in the app
-(optionally through GOD's model router). Ask Harness hands the selection to GOD.
-
-## Package layout
-
-| Target | Platform | Contents |
-|---|---|---|
-| `DictationCore` | Any (tested on Linux) | Cleanup, dictionary, insertion, routing, bridge protocol, session state machine, audio math, transcription API, settings, history |
-| `DictationEngine` | iOS (app + keyboard) | Mic capture, SpeechAnalyzer transcriber, remote transcriber, Foundation Models rewriter, App Group bridge, Keychain, network monitor |
-| `HarnessKeyboardKit` | iOS keyboard | `HarnessKeyboardViewController`, view model, SwiftUI keyboard |
-| `DictationAppKit` | iOS app | `DictationHost`, Dictation tab, settings screens, handoff screen |
-
-## How it is wired into Harness
-
-Requirements: Xcode 26+, iOS 26+ (SpeechAnalyzer and Foundation Models).
-
-`scripts/generate-project.py` (repo root) generates both targets; run it after adding files.
-
-| Piece | Where |
+| Target | Responsibility |
 |---|---|
-| App links `DictationAppKit` and `DictationEngine` | generated project, local package `../Packages/HarnessDictation` |
-| One `DictationHost` for the app's lifetime, `harness://` links, scene phase, handoff screen, Ask Harness → GOD | `iOS/Harness/HarnessApp.swift` |
-| Dictation tab | `iOS/Harness/RootView.swift` |
-| Composer prefill from Ask Harness | `AppModel.prefillComposer(_:)`, `ConversationView` |
-| Microphone string, `audio` background mode, `harness` URL scheme | `iOS/Harness/Info.plist` |
-| Keyboard extension (`org.harness.ios.keyboard`), Full Access on | `iOS/HarnessKeyboard/` |
-| App Group `group.org.harness.ios` on both targets | `iOS/Harness/Harness.entitlements`, `iOS/HarnessKeyboard/HarnessKeyboard.entitlements` |
-| Privacy manifests (App Group defaults, system uptime) | `PrivacyInfo.xcprivacy` in both targets |
+| `DictationCore` | Portable cleanup, vocabulary, prompts, routing, bridge messages, insertion rules, subscriptions and session state |
+| `DictationEngine` | iOS microphone/Speech adapters, Apple text models, instructions/settings storage, App Group bridge and Keychain |
+| `DictationAppKit` | App microphone lifecycle, Speak screens, instructions editor and handoff |
+| `HarnessKeyboardKit` | Keyboard controls, field/selection validation, insertion and undo |
 
-To sign for a device, create the App Group `group.org.harness.ios` (or change it in the two entitlements
-files and in `KeyboardViewController.appGroupIdentifier` / `HarnessApp`) and enable it on both App IDs.
+The host integration lives in `iOS/Harness/HarnessApp.swift`. It passes verified subscription access and optional PCC enablement to the dictation host. Ask Harness prefills the Dot composer. Dot's provider/router is separate; its fallback rewriter and a paired-computer speech service are not connected to Speak yet.
 
-Not wired yet: the paired-computer transcription service (`PairedComputerTranscription`, needs a
-companion endpoint) and GOD's model router as `fallbackRewriter` for devices without Apple Intelligence.
+## Build and setup
 
-## Test
+Requires Xcode 26+ and iOS 26+. Optional PCC code requires the Xcode 27 SDK. Open the root `iOS/Harness.xcodeproj`, configure signing and register `group.org.harness.ios` for both app and keyboard. If changing the group, update both entitlements and the app/keyboard configuration.
 
-```bash
-swift test                              # 76 tests: cleanup, dictionary, insertion, routing, bridge, session machine, audio, API
-Tools/LinuxTypeCheck/check.sh           # type-checks every file, SwiftUI and UIKit included, without an Apple SDK
-Tools/LinuxTypeCheck/check.sh strict    # same, with strict concurrency on the engine and logic modules
+Run `python3 scripts/generate-project.py` from the repository root after adding app files. Set real `HarnessSubscriptionProductIDs` in the host Info.plist before testing StoreKit access. Enabling `HarnessPrivateCloudEnabled` alone does not grant Apple's PCC entitlement.
+
+## Verification
+
+From this package directory:
+
+```sh
+swift test
+Tools/LinuxTypeCheck/check.sh
+Tools/LinuxTypeCheck/check.sh strict
 ```
 
-`Tools/LinuxTypeCheck` compiles the real sources (plus the repo's keyboard extension file) against interface
-stubs of SwiftUI, UIKit, AVFoundation, Speech and Foundation Models, so CI can run it on Linux. It
-catches wrong names, types, bindings, closure shapes, access levels and actor isolation. It can't catch
-layout or runtime behavior: build in Xcode and work through `docs/QA_CHECKLIST.md` on a device for that.
-`docs/PRIVACY.md` has the data-flow guarantees and `docs/APP_REVIEW.md` the review notes.
+The portable suite currently passes 109 tests. The stub checker includes SwiftUI/UIKit sources and the repository keyboard extension; it checks API shapes and concurrency on Linux, or with separately named stand-ins on macOS. It does not verify layout, framework runtime behavior or microphone-to-field handoff.
 
-## Sources
-
-- Apple: [SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer),
-  [DictationTranscriber](https://developer.apple.com/documentation/speech/dictationtranscriber),
-  [Foundation Models](https://developer.apple.com/documentation/foundationmodels)
-- Typeless: [App Store](https://apps.apple.com/app/id6749257650), [Data controls](https://typeless.com/data-controls)
-- Wispr Flow: [Set up the Flow keyboard on iPhone](https://docs.wisprflow.ai/articles/7453988911-Set-up-the-Flow-keyboard-on-iPhone),
-  [Privacy Mode & Data Retention](https://docs.wisprflow.ai/articles/6274675613-privacy-mode-data-retention)
-- Superwhisper: [iOS getting started](https://superwhisper.com/docs/get-started/ios), [Superwhisper for iOS](https://superwhisper.com/ios)
-- Diction: [App Store](https://apps.apple.com/app/id6759807364)
+Use the [physical-device QA checklist](docs/QA_CHECKLIST.md) and [draft App Review notes](docs/APP_REVIEW.md) before release. Compilation and local model checks do not prove subscription transactions, PCC eligibility or real keyboard insertion.

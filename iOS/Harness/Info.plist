@@ -9,6 +9,12 @@
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <!-- Populate with real auto-renewable product IDs from this app's App Store Connect record.
+         Empty intentionally means subscriptions are unconfigured; it never grants paid access. -->
+    <key>HarnessSubscriptionProductIDs</key><array/>
+    <!-- Enable only after Apple approves the account's PCC capability and the app's
+         provisioning profile contains com.apple.developer.private-cloud-compute. -->
+    <key>HarnessPrivateCloudEnabled</key><false/>
     <key>CFBundleURLTypes</key><array><dict>
         <key>CFBundleURLName</key><string>org.harness.ios</string>
         <key>CFBundleURLSchemes</key><array><string>harness</string></array>
