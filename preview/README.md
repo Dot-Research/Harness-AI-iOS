@@ -6,7 +6,7 @@ Open `harness-preview.html` in a browser. This portable file includes all styles
 python3 -m http.server 4173 --directory preview
 ```
 
-Open `http://localhost:4173`. The primary spaces are **Dot → Speak → Social → .md → Me**. Expanded layout places the workspace on the left, content in the middle, and navigation on the right. Compact layout uses a five-item bottom bar. Narrow browser windows also use the compact shell.
+Open `http://localhost:4173`. The primary spaces are **Dot → Speak → Social → .md → Me**. Expanded layout places the workspace on the left, content in the middle, and navigation on the right. Compact layout uses a five-item bottom bar. In both, Dot's navigation item is the logo itself (ringed when selected), so there is no separate logo above the navigation. Narrow browser windows also use the compact shell.
 
 ## What to try
 

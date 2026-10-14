@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import HarnessCore
 import DictationAppKit
 
@@ -14,6 +15,34 @@ enum HarnessTab: String, CaseIterable, Identifiable {
         case .red: return "bubble.left.and.bubble.right"
         case .me: return "person.crop.circle"
         }
+    }
+
+    /// Dot's icon is the Harness logo itself (ringed when selected); the other spaces use symbols.
+    @MainActor func tabIcon(selected: Bool) -> Image {
+        if self == .god, let logo = selected ? Self.dotIconSelected : Self.dotIcon { return Image(uiImage: logo) }
+        return Image(systemName: symbol)
+    }
+
+    @MainActor private static let dotIcon = logoIcon(ring: nil)
+    @MainActor private static let dotIconSelected = logoIcon(ring: UIColor(HarnessTheme.coral))
+
+    /// Tab bars don't scale asset images, so draw a tab-sized, rounded copy of the one logo asset at
+    /// runtime (the artwork itself is unchanged) and keep its colors instead of tinting it.
+    @MainActor private static func logoIcon(ring: UIColor?) -> UIImage? {
+        guard let logo = UIImage(named: "HarnessLogo") else { return nil }
+        let canvas = CGRect(x: 0, y: 0, width: 30, height: 30)
+        let art = canvas.insetBy(dx: 3.5, dy: 3.5)
+        let icon = UIGraphicsImageRenderer(size: canvas.size).image { _ in
+            if let ring {
+                ring.setStroke()
+                let outline = UIBezierPath(roundedRect: canvas.insetBy(dx: 1, dy: 1), cornerRadius: 8)
+                outline.lineWidth = 2
+                outline.stroke()
+            }
+            UIBezierPath(roundedRect: art, cornerRadius: 5).addClip()
+            logo.draw(in: art, blendMode: .normal, alpha: ring == nil ? 0.85 : 1)
+        }
+        return icon.withRenderingMode(.alwaysOriginal)
     }
 }
 
@@ -31,7 +60,7 @@ struct RootView: View {
                 TabView(selection: $model.selectedTab) {
                     ForEach(HarnessTab.allCases) { tab in
                         tabRoot(tab)
-                            .tabItem { Label(tab.rawValue, systemImage: tab.symbol) }
+                            .tabItem { Label { Text(tab.rawValue) } icon: { tab.tabIcon(selected: model.selectedTab == tab) } }
                             .tag(tab)
                             .toolbar(usesRail ? .hidden : .visible, for: .tabBar)
                     }
@@ -59,17 +88,19 @@ struct RootView: View {
     private var navigationRail: some View {
         ScrollView {
             VStack(spacing: 24) {
-                HarnessMark(size: 42)
-                    .padding(.top, 22)
-                Text("HARNESS")
-                    .font(.system(.caption2, design: .monospaced).weight(.semibold))
-                    .tracking(1.1).foregroundStyle(HarnessTheme.secondary)
-                    .lineLimit(1).minimumScaleFactor(0.8).accessibilityHidden(true)
                 VStack(spacing: 10) {
                     ForEach(HarnessTab.allCases) { tab in
                         Button { model.selectedTab = tab } label: {
                             VStack(spacing: 8) {
-                                Image(systemName: tab.symbol).font(.title3)
+                                if tab == .god {
+                                    // The logo is Dot's item, so it also marks where you are.
+                                    HarnessMark(size: 30)
+                                        .overlay(RoundedRectangle(cornerRadius: 9)
+                                            .stroke(model.selectedTab == tab ? tab.accent : .clear, lineWidth: 2)
+                                            .padding(-3))
+                                } else {
+                                    Image(systemName: tab.symbol).font(.title3)
+                                }
                                 Text(tab.rawValue).font(.caption.weight(.medium))
                             }
                             .foregroundStyle(model.selectedTab == tab ? tab.accent : HarnessTheme.secondary)
@@ -84,7 +115,7 @@ struct RootView: View {
                     }
                 }
             }
-            .padding(.horizontal, 10).padding(.bottom, 22)
+            .padding(.horizontal, 10).padding(.top, 22).padding(.bottom, 22)
         }
         .frame(width: 88)
         .frame(maxHeight: .infinity)
