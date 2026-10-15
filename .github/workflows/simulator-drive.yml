@@ -1,0 +1,66 @@
+name: Simulator drive
+# Runs .claude/skills/run-harness-ios/sim.sh ci: builds Harness + Harness Keyboard for an iOS 26
+# simulator, enables the keyboard, drives it with XCUITest and uploads the screenshots.
+# macOS minutes are expensive, so this runs only when the driver changes, or by hand.
+on:
+  push:
+    paths:
+      - '.claude/skills/run-harness-ios/**'
+      - '!.claude/skills/run-harness-ios/SKILL.md'
+      - '.github/workflows/simulator-drive.yml'
+  workflow_dispatch:
+    inputs:
+      shots:
+        description: 'Screenshot name prefixes to print into the shots job log (space separated)'
+        default: 'subscription-1 settings-02 no-harness typing-01 typing-03 typing-08 typing-10-return-search toggle-02 access-01 dictating rewrite'
+permissions:
+  contents: read
+concurrency:
+  group: simulator-drive-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  drive:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: xcodebuild -version && xcrun simctl list runtimes | grep -i ios
+      - name: sim.sh ci
+        run: .claude/skills/run-harness-ios/sim.sh ci
+      - if: always()
+        name: Results
+        run: |
+          ls .build/harness-sim/shots || true
+          for f in .build/harness-sim/shots/note*.txt .build/harness-sim/shots/*tree*.txt; do [ -f "$f" ] || continue; echo "::group::$f"; grep -E "label|identifier|value|Keyboard" "$f" | sed -E "s/0x[0-9a-f]+, //" | head -120; echo; echo "::endgroup::"; done
+          for f in .build/harness-sim/prefs-*/TCC.txt; do [ -f "$f" ] || continue; echo "== $f"; cat "$f"; done
+          for f in .build/harness-sim/prefs-diff-*.txt; do [ -f "$f" ] || continue; echo "::group::$f"; grep -E '^(\+\+\+|[-+] .*([Kk]eyboard|harness|Harness|OpenAccess|Full))' "$f" | head -150; echo "::endgroup::"; done
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-sim
+          path: |
+            .build/harness-sim/shots
+            .build/harness-sim/*.log
+            .build/harness-sim/prefs-diff-*.txt
+          if-no-files-found: warn
+
+  # Prints selected screenshots (small JPEG, base64) into this job's log, for readers who can't
+  # download artifacts. Decode: .claude/skills/run-harness-ios/shots-from-log.py <job log> <out dir>
+  shots:
+    needs: drive
+    if: always()
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: harness-sim
+          path: sim
+      - run: |
+          for prefix in ${{ github.event.inputs.shots || 'subscription-1 settings-02 no-harness typing-01 typing-03 typing-08 typing-10-return-search toggle-02 access-01 dictating rewrite' }}; do
+            for f in $(ls sim/shots/$prefix*.png 2>/dev/null | head -2); do
+              [ -f "$f" ] || continue
+              sips -Z 560 -s format jpeg -s formatOptions 35 "$f" --out /tmp/shot.jpg >/dev/null
+              echo "SHOT-BEGIN $(basename "${f%.png}").jpg"; base64 -b 900 -i /tmp/shot.jpg; echo "SHOT-END"
+            done
+          done
